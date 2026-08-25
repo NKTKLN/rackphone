@@ -1,0 +1,6 @@
+id=rackphone-core
+name=Rackphone Core
+version=v0.1.0
+versionCode=1
+author=nktkln
+description=Plugin host for Rackphone server units. Provides the config store (prop > config.env > default), plugin discovery, and the rackphone CLI that the Flutter app and the host-side Python CLI both drive.

@@ -1,0 +1,25 @@
+services:
+  rackphone:
+    build:
+      context: ./cli
+    image: rackphone:0.1.0
+    restart: unless-stopped
+    environment:
+      # The adb server runs on the VM, not in here. host.docker.internal is
+      # mapped below for Linux hosts, where Docker does not provide it by default.
+      ADB_SERVER_SOCKET: tcp:host.docker.internal:5037
+      RACKPHONE_REPO: /repo
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      # Unit files are the declared state and belong in the repo, so they are
+      # mounted rather than baked into the image.
+      - ./units:/repo/units:ro
+      - ./modules:/repo/modules:ro
+    ports:
+      - "127.0.0.1:9105:9105"
+
+  # Start the adb server on the VM before this comes up:
+  #   adb -a -P 5037 nodaemon server
+  # or, as a unit:
+  #   systemd-run --unit adb-server adb -a -P 5037 nodaemon server

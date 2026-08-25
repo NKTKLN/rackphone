@@ -1,0 +1,56 @@
+{
+  "id": "telemetry",
+  "name": "Telemetry",
+  "description": "Prometheus metrics for this unit.",
+  "icon": "monitoring",
+  "settings": [
+    {
+      "key": "thermal_include",
+      "type": "string",
+      "default": "^(battery|msm-skin-therm-usr|cpuss-[01]-usr|gpuss-[01]-usr|mdmss-[0-9]-usr|ddr-usr|aoss-[01]-usr|pa_therm[01])$",
+      "label": "Thermal zones to export",
+      "help": "Regex matched against the zone type. lisa exposes 89 zones; exporting all of them is a cardinality problem, not a feature."
+    },
+    {
+      "key": "net_include",
+      "type": "string",
+      "default": "^(rmnet_data[0-9]+|wlan0|usb0|tun0|tailscale0)$",
+      "label": "Network interfaces to export",
+      "help": "Regex matched against the interface name in /proc/net/dev."
+    },
+    {
+      "key": "collect_telephony",
+      "type": "bool",
+      "default": "1",
+      "label": "Collect radio metrics",
+      "help": "RSRP/RSRQ/SINR and cell identity via dumpsys. Costs roughly 150ms per scrape, so turn it off if you scrape faster than 10s."
+    },
+    {
+      "key": "collect_diskstats",
+      "type": "bool",
+      "default": "1",
+      "label": "Collect disk I/O counters"
+    },
+    {
+      "key": "listener_enabled",
+      "type": "bool",
+      "default": "0",
+      "label": "On-device HTTP listener",
+      "help": "Off by default. The host normally pulls metrics with `adb exec-out rackphone metrics`, which needs no listening socket at all. Turn this on only if you want to scrape over adb forward instead."
+    },
+    {
+      "key": "listener_port",
+      "type": "int",
+      "default": "9105",
+      "min": 1024,
+      "max": 65535,
+      "label": "Listener port",
+      "depends_on": "listener_enabled"
+    }
+  ],
+  "actions": [
+    { "id": "dump", "label": "Show current metrics" },
+    { "id": "restart_listener", "label": "Restart listener" }
+  ],
+  "status": ["listener", "port", "last_scrape_ms", "zones_exported", "root"]
+}

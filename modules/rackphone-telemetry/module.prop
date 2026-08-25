@@ -1,0 +1,6 @@
+id=rackphone-telemetry
+name=Rackphone Telemetry
+version=v0.1.0
+versionCode=1
+author=nktkln
+description=Prometheus exporter for a phone acting as a server unit. Collects battery, thermal, CPU, memory, storage, network and radio metrics on-device; the Proxmox host bridges them over adb so nothing is exposed to the network.

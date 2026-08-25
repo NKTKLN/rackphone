@@ -1,0 +1,6 @@
+id=rackphone-battery
+name=Rackphone Battery Guard
+version=v0.1.0
+versionCode=1
+author=nktkln
+description=Holds the pack in a charge window instead of pinning it at 100 percent, which is what wears a permanently-cabled phone. Detects the writable charge-control node at runtime and always restores charging on exit or below the safety floor.

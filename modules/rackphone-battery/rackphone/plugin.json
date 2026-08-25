@@ -1,0 +1,67 @@
+{
+  "id": "battery",
+  "name": "Battery Guard",
+  "description": "Keeps the pack in a charge window so a permanently-powered unit does not sit at 100%.",
+  "icon": "battery",
+  "settings": [
+    {
+      "key": "enabled",
+      "type": "bool",
+      "default": "1",
+      "label": "Enable charge limiting"
+    },
+    {
+      "key": "max_percent",
+      "type": "int",
+      "default": "80",
+      "min": 30,
+      "max": 100,
+      "label": "Stop charging at",
+      "unit": "%",
+      "help": "Li-ion ages fastest held at high state of charge. 80 is the usual compromise between longevity and useful reserve."
+    },
+    {
+      "key": "min_percent",
+      "type": "int",
+      "default": "60",
+      "min": 20,
+      "max": 95,
+      "label": "Resume charging below",
+      "unit": "%",
+      "help": "Must be below max_percent. A wide window means fewer charge cycles; a narrow one keeps the reserve more predictable."
+    },
+    {
+      "key": "safety_floor",
+      "type": "int",
+      "default": "20",
+      "min": 5,
+      "max": 50,
+      "label": "Safety floor",
+      "unit": "%",
+      "help": "Charging is force-resumed below this level whatever else is configured. This is the backstop against a misconfigured window draining the unit."
+    },
+    {
+      "key": "poll_interval",
+      "type": "int",
+      "default": "60",
+      "min": 10,
+      "max": 900,
+      "label": "Check interval",
+      "unit": "s"
+    },
+    {
+      "key": "method",
+      "type": "enum",
+      "default": "auto",
+      "values": ["auto", "input_suspend", "battery_charging_enabled", "charge_control_limit"],
+      "label": "Control method",
+      "help": "auto probes each node for writability at start. Pin it only if detection picks a node that misbehaves on this kernel."
+    }
+  ],
+  "actions": [
+    { "id": "resume",   "label": "Resume charging now" },
+    { "id": "suspend",  "label": "Suspend charging now" },
+    { "id": "redetect", "label": "Re-detect control node" }
+  ],
+  "status": ["guard", "capacity", "charging", "suspended", "method_in_use", "window", "soh_percent"]
+}

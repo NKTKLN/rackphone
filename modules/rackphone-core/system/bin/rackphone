@@ -1,0 +1,307 @@
+#!/system/bin/sh
+#
+# rackphone - on-device control surface for Rackphone server units.
+#
+# Every consumer goes through this one command: the Flutter app on the phone,
+# the Python CLI on the Proxmox host (over `adb exec-out`), and the plugins
+# themselves when they need to read their own settings. Keeping a single
+# entry point is what lets the app render itself from whatever is installed
+# instead of hardcoding screens.
+#
+# Plugin contract
+# ---------------
+# A Magisk module joins Rackphone by shipping a `rackphone/` directory:
+#
+#   rackphone/plugin.json    required - declares settings, actions, status keys
+#   rackphone/defaults.env   required - <key>=<value>, generated from plugin.json
+#   rackphone/metrics.sh     optional - writes Prometheus text to stdout
+#   rackphone/status.sh      optional - writes <key>=<value> lines to stdout
+#   rackphone/action.sh      optional - invoked as: action.sh <action-id>
+#
+# Config precedence, highest first:
+#   1. persist.rackphone.<module>.<key>
+#   2. /data/adb/rackphone/config.env
+#   3. <module>/rackphone/defaults.env
+
+set -u
+
+CONF_DIR=/data/adb/rackphone
+CONFIG="$CONF_DIR/config.env"
+MODULES_DIR=/data/adb/modules
+RUN_DIR="$CONF_DIR/run"
+
+die() { echo "rackphone: $*" >&2; exit 1; }
+
+# ---------------------------------------------------------------- plugins ---
+
+# Echoes the plugin id of every installed, enabled Rackphone plugin.
+# Plugin ids are the Magisk module id with the `rackphone-` prefix stripped,
+# so config keys read `telemetry.listener_port` rather than repeating the
+# namespace twice in every property name.
+plugin_ids() {
+  for d in "$MODULES_DIR"/*; do
+    [ -f "$d/rackphone/plugin.json" ] || continue
+    # Magisk marks a disabled module with a `disable` file; honour that so the
+    # app stops showing a card for something the user turned off in Magisk.
+    [ -f "$d/disable" ] && continue
+    _b=$(basename "$d")
+    echo "${_b#rackphone-}"
+  done
+}
+
+plugin_dir() {
+  for _cand in "$MODULES_DIR/rackphone-$1" "$MODULES_DIR/$1"; do
+    if [ -f "$_cand/rackphone/plugin.json" ]; then echo "$_cand"; return 0; fi
+  done
+  return 1
+}
+
+# Same scan as plugin_ids but keeps disabled plugins, so the host CLI can offer
+# to turn one back on. Emits "<id> <enabled|disabled> <name>".
+plugin_ids_all() {
+  for d in "$MODULES_DIR"/*; do
+    [ -f "$d/rackphone/plugin.json" ] || continue
+    _b=$(basename "$d")
+    _state=enabled
+    [ -f "$d/disable" ] && _state=disabled
+    _name=$(sed -n 's/^name=//p' "$d/module.prop" 2>/dev/null | head -1)
+    echo "${_b#rackphone-} $_state ${_name:-$_b}"
+  done
+}
+
+set_enabled() {
+  _d=$(plugin_dir "$1") || die "no such plugin: $1"
+  case "$2" in
+    enable)  rm -f "$_d/disable" ;;
+    disable) touch "$_d/disable" ;;
+  esac
+  # Magisk reads the marker at boot, so a running service has to be stopped now
+  # or it would keep working until the next reboot and look like the toggle
+  # silently failed.
+  if [ "$2" = "disable" ]; then
+    for _pf in "$RUN_DIR/$1.pid"; do
+      [ -f "$_pf" ] && kill "$(cat "$_pf")" 2>/dev/null
+    done
+  fi
+  echo "$1 $2d (takes full effect after reboot)"
+}
+
+selinux_mode() {
+  case "${1:-status}" in
+    status)     getenforce ;;
+    permissive) setenforce 0 && echo "SELinux: permissive" ;;
+    enforcing)  setenforce 1 && echo "SELinux: enforcing" ;;
+    *) die "usage: rackphone selinux [status|permissive|enforcing]" ;;
+  esac
+}
+
+# ----------------------------------------------------------------- config ---
+
+# resolve <module> <key> -> effective value, or empty if the key is unknown.
+resolve() {
+  _mod=$1; _key=$2
+
+  _p=$(getprop "persist.rackphone.$_mod.$_key" 2>/dev/null)
+  if [ -n "$_p" ]; then echo "$_p"; return 0; fi
+
+  if [ -f "$CONFIG" ]; then
+    _v=$(sed -n "s/^[[:space:]]*$_mod\.$_key=//p" "$CONFIG" | tail -1)
+    if [ -n "$_v" ]; then echo "$_v"; return 0; fi
+  fi
+
+  _d=$(plugin_dir "$_mod") || return 1
+  if [ -f "$_d/rackphone/defaults.env" ]; then
+    _v=$(sed -n "s/^[[:space:]]*$_key=//p" "$_d/rackphone/defaults.env" | tail -1)
+    if [ -n "$_v" ]; then echo "$_v"; return 0; fi
+  fi
+  return 1
+}
+
+# Reports which layer supplied the value, so the app can show "overridden".
+origin() {
+  _mod=$1; _key=$2
+  [ -n "$(getprop "persist.rackphone.$_mod.$_key" 2>/dev/null)" ] && { echo prop; return; }
+  if [ -f "$CONFIG" ] && [ -n "$(sed -n "s/^[[:space:]]*$_mod\.$_key=//p" "$CONFIG")" ]; then
+    echo config; return
+  fi
+  echo default
+}
+
+# set_value writes both layers: the property for immediate effect, and
+# config.env so the setting survives a reboot even if props are cleared.
+set_value() {
+  _mod=$1; _key=$2; _val=$3
+  plugin_dir "$_mod" >/dev/null || die "no such plugin: $_mod"
+
+  resetprop "persist.rackphone.$_mod.$_key" "$_val" 2>/dev/null \
+    || setprop "persist.rackphone.$_mod.$_key" "$_val" \
+    || die "could not set property (is this running as root?)"
+
+  mkdir -p "$CONF_DIR"
+  touch "$CONFIG"
+  _tmp="$CONFIG.tmp.$$"
+  grep -v "^[[:space:]]*$_mod\.$_key=" "$CONFIG" > "$_tmp" 2>/dev/null || true
+  echo "$_mod.$_key=$_val" >> "$_tmp"
+  mv "$_tmp" "$CONFIG"
+  chmod 0600 "$CONFIG"
+
+  # Let a running plugin pick the change up without a reboot.
+  _d=$(plugin_dir "$_mod")
+  [ -f "$_d/rackphone/reload.sh" ] && sh "$_d/rackphone/reload.sh" >/dev/null 2>&1
+  return 0
+}
+
+unset_value() {
+  _mod=$1; _key=$2
+  resetprop -d "persist.rackphone.$_mod.$_key" 2>/dev/null || true
+  if [ -f "$CONFIG" ]; then
+    _tmp="$CONFIG.tmp.$$"
+    grep -v "^[[:space:]]*$_mod\.$_key=" "$CONFIG" > "$_tmp" 2>/dev/null || true
+    mv "$_tmp" "$CONFIG"
+    chmod 0600 "$CONFIG"
+  fi
+}
+
+split_key() {
+  case "$1" in
+    *.*) _MOD=${1%%.*}; _KEY=${1#*.} ;;
+    *)   die "expected <module>.<key>, got: $1" ;;
+  esac
+}
+
+# ------------------------------------------------------------------ output ---
+
+json_escape() {
+  # Minimal but correct for the value shapes plugins actually emit.
+  sed -e 's/\\/\\\\/g' -e 's/"/\\"/g' -e 's/\t/\\t/g' | tr -d '\r' | tr '\n' ' '
+}
+
+cmd_schema() {
+  # One JSON array of every installed plugin's declaration, plus the currently
+  # effective value and its origin for each setting. The app needs both: the
+  # declaration to build widgets, the value to populate them.
+  echo '{'
+  echo '  "unit": "'"$(getprop ro.product.device)"'",'
+  echo '  "model": "'"$(getprop ro.product.model)"'",'
+  echo '  "lineage": "'"$(getprop ro.lineage.version)"'",'
+  echo '  "plugins": ['
+  _first=1
+  for id in $(plugin_ids); do
+    d=$(plugin_dir "$id")
+    [ $_first -eq 1 ] || echo '    ,'
+    _first=0
+    echo '    {'
+    echo '      "id": "'"$id"'",'
+    echo '      "declaration": '"$(cat "$d/rackphone/plugin.json" | tr -d '\n')"','
+    echo '      "values": {'
+    _vf=1
+    if [ -f "$d/rackphone/defaults.env" ]; then
+      # Iterate the declared keys, not whatever happens to be in config.env,
+      # so a stale key left over from an older plugin version stays invisible.
+      for k in $(sed -n 's/^[[:space:]]*\([A-Za-z0-9_]*\)=.*/\1/p' "$d/rackphone/defaults.env"); do
+        v=$(resolve "$id" "$k") || v=""
+        o=$(origin "$id" "$k")
+        [ $_vf -eq 1 ] || echo '        ,'
+        _vf=0
+        echo '        "'"$k"'": { "value": "'"$(printf '%s' "$v" | json_escape)"'", "origin": "'"$o"'" }'
+      done
+    fi
+    echo '      }'
+    echo '    }'
+  done
+  echo '  ]'
+  echo '}'
+}
+
+cmd_status() {
+  echo '{'
+  _first=1
+  for id in $(plugin_ids); do
+    d=$(plugin_dir "$id")
+    [ -x "$d/rackphone/status.sh" ] || [ -f "$d/rackphone/status.sh" ] || continue
+    [ $_first -eq 1 ] || echo '  ,'
+    _first=0
+    echo '  "'"$id"'": {'
+    _sf=1
+    sh "$d/rackphone/status.sh" 2>/dev/null | while IFS='=' read -r k v; do
+      [ -n "$k" ] || continue
+      [ "$_sf" = 1 ] || echo '    ,'
+      _sf=0
+      echo '    "'"$k"'": "'"$(printf '%s' "$v" | json_escape)"'"'
+    done
+    echo '  }'
+  done
+  echo '}'
+}
+
+cmd_metrics() {
+  # Concatenating each plugin's output keeps the exposition format honest:
+  # a plugin owns its HELP/TYPE lines and nobody else emits its metric names.
+  for id in $(plugin_ids); do
+    d=$(plugin_dir "$id")
+    [ -f "$d/rackphone/metrics.sh" ] || continue
+    sh "$d/rackphone/metrics.sh" 2>/dev/null
+  done
+  echo "# HELP rackphone_plugins_installed Number of Rackphone plugins currently enabled."
+  echo "# TYPE rackphone_plugins_installed gauge"
+  echo "rackphone_plugins_installed $(plugin_ids | wc -l | tr -d ' ')"
+}
+
+cmd_doctor() {
+  echo "root:        $(id -u 2>/dev/null)"
+  echo "config:      $CONFIG $([ -f "$CONFIG" ] && echo present || echo MISSING)"
+  echo "plugins:     $(plugin_ids | tr '\n' ' ')"
+  echo "battery ro:  $(cat /sys/class/power_supply/battery/capacity 2>/dev/null || echo DENIED)"
+  echo "thermal:     $(ls -d /sys/class/thermal/thermal_zone* 2>/dev/null | wc -l | tr -d ' ') zones"
+  echo "magisk:      $(magisk -v 2>/dev/null || echo absent)"
+}
+
+usage() {
+  cat <<'USAGE'
+rackphone - control surface for a Rackphone server unit
+
+  rackphone modules                 list enabled plugin ids
+  rackphone plugins                 list all plugins with enabled/disabled state
+  rackphone enable <plugin>         re-enable a disabled plugin
+  rackphone disable <plugin>        disable a plugin (Magisk marker)
+  rackphone selinux [mode]          status | permissive | enforcing
+  rackphone schema                  full JSON: declarations + effective values
+  rackphone status                  live status JSON from every plugin
+  rackphone metrics                 Prometheus exposition text
+  rackphone get <module>.<key>      effective value
+  rackphone origin <module>.<key>   which layer supplied it
+  rackphone set <module>.<key> <v>  override (property + config.env)
+  rackphone unset <module>.<key>    drop the override
+  rackphone action <module> <id>    run a declared action
+  rackphone doctor                  environment sanity check
+USAGE
+}
+
+[ $# -ge 1 ] || { usage; exit 2; }
+cmd=$1; shift
+
+case "$cmd" in
+  modules) plugin_ids ;;
+  plugins) plugin_ids_all ;;
+  enable)  [ $# -eq 1 ] || die "usage: rackphone enable <plugin>";  set_enabled "$1" enable ;;
+  disable) [ $# -eq 1 ] || die "usage: rackphone disable <plugin>"; set_enabled "$1" disable ;;
+  selinux) selinux_mode "${1:-status}" ;;
+  schema)  cmd_schema ;;
+  status)  cmd_status ;;
+  metrics) cmd_metrics ;;
+  doctor)  cmd_doctor ;;
+  get)     [ $# -eq 1 ] || die "usage: rackphone get <module>.<key>"
+           split_key "$1"; resolve "$_MOD" "$_KEY" || die "unknown key: $1" ;;
+  origin)  [ $# -eq 1 ] || die "usage: rackphone origin <module>.<key>"
+           split_key "$1"; origin "$_MOD" "$_KEY" ;;
+  set)     [ $# -eq 2 ] || die "usage: rackphone set <module>.<key> <value>"
+           split_key "$1"; set_value "$_MOD" "$_KEY" "$2" ;;
+  unset)   [ $# -eq 1 ] || die "usage: rackphone unset <module>.<key>"
+           split_key "$1"; unset_value "$_MOD" "$_KEY" ;;
+  action)  [ $# -eq 2 ] || die "usage: rackphone action <module> <action-id>"
+           d=$(plugin_dir "$1") || die "no such plugin: $1"
+           [ -f "$d/rackphone/action.sh" ] || die "plugin $1 declares no actions"
+           sh "$d/rackphone/action.sh" "$2" ;;
+  -h|--help|help) usage ;;
+  *)       die "unknown command: $cmd (try: rackphone help)" ;;
+esac

@@ -1,0 +1,11 @@
+__pycache__/
+*.pyc
+.venv/
+dist/
+build/
+*.zip
+inventory/*.txt
+!inventory/.gitkeep
+app/build/
+app/.dart_tool/
+dist/

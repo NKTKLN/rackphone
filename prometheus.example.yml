@@ -1,0 +1,11 @@
+# Scrape config for the Rackphone bridge.
+#
+# One target covers every unit: the bridge adds a `unit` label to each sample,
+# because a single process serves several phones and `instance` cannot
+# distinguish them.
+scrape_configs:
+  - job_name: rackphone
+    scrape_interval: 15s
+    scrape_timeout: 10s
+    static_configs:
+      - targets: ["127.0.0.1:9105"]
