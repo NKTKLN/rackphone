@@ -30,6 +30,23 @@ def _serial_for(args) -> tuple[str, str]:
     return adb.resolve_serial(None), "(unadopted)"
 
 
+def _record_in_unit(unit_name: str, key: str, value: str) -> bool:
+    """Mirror a setting into the repo's unit file.
+
+    Every path that changes a setting must go through here. A command that
+    writes only the device leaves the repo behind, and the next `deploy` then
+    silently reverts the change - which is the whole failure the three-layer
+    design exists to avoid.
+    """
+    try:
+        unit = config.Unit.load(unit_name)
+    except FileNotFoundError:
+        return False
+    unit.set(key, value)
+    unit.save()
+    return True
+
+
 def _split(dotted: str) -> tuple[str, str]:
     if "." not in dotted:
         raise SystemExit(f"expected <plugin>.<key>, got {dotted!r}")
@@ -221,14 +238,10 @@ def cmd_set(args) -> int:
 
     # Keep the repo in step with the hardware, so the next deploy does not
     # quietly revert a change made here.
-    try:
-        unit = config.Unit.load(name)
-    except FileNotFoundError:
+    if _record_in_unit(name, f"{plugin_id}.{key}", value):
+        render.dim(f"  recorded in {name}.env")
+    else:
         render.dim("  (unit not adopted; change is live but not tracked in the repo)")
-        return 0
-    unit.set(f"{plugin_id}.{key}", value)
-    unit.save()
-    render.dim(f"  recorded in {unit.path.name}")
     return 0
 
 
@@ -350,7 +363,7 @@ def cmd_toggle(args) -> int:
 
 
 def cmd_selinux(args) -> int:
-    serial, _ = _serial_for(args)
+    serial, name = _serial_for(args)
     if args.mode is None:
         render.info(adb.su_shell(serial, "rackphone selinux status").strip())
         return 0
@@ -366,6 +379,8 @@ def cmd_selinux(args) -> int:
     if args.persist:
         adb.rp(serial, ["set", "core.selinux_mode", args.mode])
         render.dim(f"  persisted: core.selinux_mode = {args.mode}")
+        if _record_in_unit(name, "core.selinux_mode", args.mode):
+            render.dim(f"  recorded in {name}.env")
     else:
         render.dim("  not persisted; the kernel resets this on reboot (use --persist)")
     return 0
