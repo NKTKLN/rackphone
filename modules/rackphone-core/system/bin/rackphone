@@ -278,7 +278,7 @@ rackphone - control surface for a Rackphone server unit
   rackphone get <module>.<key>      effective value
   rackphone origin <module>.<key>   which layer supplied it
   rackphone set <module>.<key> <v>  override (property + config.env)
-  rackphone unset <module>.<key>    drop the override
+  rackphone unset <module>.<key>    reset to the built-in default
   rackphone action <module> <id>    run a declared action
   rackphone doctor                  environment sanity check
 USAGE

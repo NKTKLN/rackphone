@@ -100,10 +100,20 @@ resume_charging() {
 
 is_suspended() { [ -f "$RUN/battery.suspended" ]; }
 
-case "${1:-}" in
-  detect)  detect ;;
-  method)  method_entry ;;
-  suspend) suspend_charging ;;
-  resume)  resume_charging ;;
-  status)  is_suspended && echo suspended || echo charging ;;
+# Dispatch only when run directly. Every other script here sources this file for
+# its functions, and three of them are themselves invoked with arguments -
+# action.sh most obviously, as `action.sh resume`. Without this guard that would
+# execute the action once at source time and again from action.sh's own case.
+case "${0##*/}" in
+  control.sh)
+    case "${1:-}" in
+      detect)  detect ;;
+      method)  method_entry ;;
+      suspend) suspend_charging ;;
+      resume)  resume_charging ;;
+      status)  is_suspended && echo suspended || echo charging ;;
+      "")      ;;
+      *) echo "control.sh: unknown command: $1" >&2; exit 2 ;;
+    esac
+    ;;
 esac

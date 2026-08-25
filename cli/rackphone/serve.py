@@ -52,9 +52,12 @@ def collect(units) -> str:
             body = adb.rp(serial, ["metrics"], timeout=45)
             chunks.append(add_unit_label(body, unit.name))
             up = 1
-        except adb.AdbError as exc:
-            # A unit being unreachable is a fact worth exporting, not an error
-            # that should fail the whole scrape and blind you to the others.
+        except Exception as exc:
+            # Deliberately broad. A unit being unreachable is a fact worth
+            # exporting, not an error that should fail the whole scrape and
+            # blind you to the others - and a wedged phone surfaces as
+            # subprocess.TimeoutExpired, not AdbError, so catching only the
+            # latter would let one bad unit take down every other unit's data.
             render.warn(f"unit {unit.name}: {exc}")
             up = 0
         elapsed = time.monotonic() - started

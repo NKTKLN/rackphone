@@ -1,7 +1,7 @@
 #!/system/bin/sh
 set -u
 MODDIR=$(cd "${0%/*}/.." && pwd)
-RUN=/data/adb/rackphone/run
+RUN=${RACKPHONE_CONF_DIR:-/data/adb/rackphone}/run
 . "$MODDIR/rackphone/control.sh"
 
 echo "# HELP rackphone_battery_guard_up Whether the charge guard loop is alive."

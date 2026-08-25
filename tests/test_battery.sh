@@ -165,4 +165,20 @@ assert_eq "min >= max leaves charging on rather than oscillating" "$INVALID" "0"
 assert_contains "and says so in the log" \
   "$(cat "$RACKPHONE_CONF_DIR/run/battery.log" 2>/dev/null)" "invalid window"
 
+section "Sourcing must not trigger actions"
+# action.sh sources control.sh while $1 is still the action id. Without the
+# dispatch guard that fires the action twice.
+reset_tree
+OUT=$(sh "$REPO/modules/rackphone-battery/rackphone/action.sh" suspend 2>&1)
+assert_eq "action.sh suspend reports once" "$(printf '%s' "$OUT" | grep -c 'charging suspended')" "1"
+assert_eq "and the node is suspended"      "$(cat "$qb/input_suspend")" "1"
+OUT=$(sh "$REPO/modules/rackphone-battery/rackphone/action.sh" resume 2>&1)
+assert_eq "action.sh resume reports once"  "$(printf '%s' "$OUT" | grep -c 'charging resumed')" "1"
+reset_tree
+# status.sh and metrics.sh source it with no args; neither may mutate the node.
+sh "$REPO/modules/rackphone-battery/rackphone/status.sh" >/dev/null 2>&1
+assert_eq "status.sh does not touch the node"  "$(cat "$qb/input_suspend")" "0"
+sh "$REPO/modules/rackphone-battery/rackphone/metrics.sh" >/dev/null 2>&1
+assert_eq "metrics.sh does not touch the node" "$(cat "$qb/input_suspend")" "0"
+
 summary

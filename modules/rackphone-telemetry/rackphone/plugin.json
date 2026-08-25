@@ -49,8 +49,21 @@
     }
   ],
   "actions": [
-    { "id": "dump", "label": "Show current metrics" },
-    { "id": "restart_listener", "label": "Restart listener" }
+    {
+      "id": "dump",
+      "label": "Show current metrics"
+    },
+    {
+      "id": "restart_listener",
+      "label": "Restart listener"
+    }
   ],
-  "status": ["listener", "port", "last_scrape_ms", "zones_exported", "root"]
+  "status": [
+    "listener",
+    "port",
+    "zones_exported",
+    "zones_total",
+    "root",
+    "last_scrape_ms"
+  ]
 }

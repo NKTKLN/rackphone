@@ -481,7 +481,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("key", metavar="PLUGIN.KEY")
     p.add_argument("value")
 
-    p = add("unset", cmd_unset, "drop a live override")
+    p = add("unset", cmd_unset, "reset a setting to its built-in default")
     p.add_argument("key", metavar="PLUGIN.KEY")
 
     p = add("action", cmd_action, "run a plugin action")

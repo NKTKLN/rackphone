@@ -185,7 +185,7 @@ docs/              install walkthrough, plugin contract, metric reference
 ./tests/run.sh
 ```
 
-**174 checks**: 54 pytest, 90 shell, 30 live-device. The device tests skip
+**187 checks**: 54 pytest, 103 shell, 30 live-device. The device tests skip
 themselves when nothing is attached, so the suite runs on a machine with no phone.
 
 | Suite | Covers |
@@ -204,10 +204,21 @@ holds captured output from a real device — `dumpsys`, all 89 thermal zones,
 radio fixture deliberately contains `Integer.MAX_VALUE` sentinels so the
 filtering that drops them stays tested.
 
-Writing tests found three bugs that had already shipped: a long value not
-clearing a stale property (so it silently never applied), `root_available`
-reading a hardcoded path, and `guard.sh` computing its log path before the
-override was in scope.
+Testing and review found six bugs that had already shipped:
+
+| Bug | Why it mattered |
+| --- | --- |
+| A long value did not clear a stale property | The old short value kept winning, so the new one silently never applied |
+| `control.sh` dispatched when sourced | `action.sh resume` ran the action twice; invisible only because resume is idempotent |
+| `status.sh` skipped the `config.env` layer | After a deploy, status reported a different port than the listener had bound |
+| `zones_exported` counted every zone | Status claimed 89 exported when 23 were |
+| `collect()` caught only `AdbError` | One wedged unit surfaces as `TimeoutExpired` and would have failed the whole scrape |
+| `root_available` and `guard.sh`'s log path were hardcoded | Bypassed the path overrides, so neither was testable |
+
+The `status.sh` one has a root cause worth naming: the three-layer precedence
+rule had been written out three times in the telemetry plugin and one copy
+drifted. It is now defined once in `rackphone/cfg.sh` and sourced, which makes
+that class of divergence impossible rather than merely unlikely.
 
 ```sh
 uv run --project cli rackphone doctor

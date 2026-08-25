@@ -24,15 +24,8 @@ MODDIR=$(cd "${0%/*}/.." && pwd)
 # is byte-for-byte the shipped one.
 SYS=${RACKPHONE_SYS_ROOT:-}
 PROC=${RACKPHONE_PROC_ROOT:-}
-CONFIG=${RACKPHONE_CONF_DIR:-/data/adb/rackphone}/config.env
 
-cfg() {
-  _v=$(getprop "persist.rackphone.telemetry.$1" 2>/dev/null)
-  [ -n "$_v" ] && { echo "$_v"; return; }
-  _v=$(sed -n "s/^[[:space:]]*telemetry\.$1=//p" "$CONFIG" 2>/dev/null | tail -1)
-  [ -n "$_v" ] && { echo "$_v"; return; }
-  sed -n "s/^[[:space:]]*$1=//p" "$MODDIR/rackphone/defaults.env" 2>/dev/null | tail -1
-}
+. "$MODDIR/rackphone/cfg.sh"
 
 THERMAL_RE=$(cfg thermal_include)
 NET_RE=$(cfg net_include)
@@ -117,10 +110,9 @@ ZONES=$(printf '%s\n' "$SYS"/sys/class/thermal/thermal_zone* | awk -v re="$THERM
     zone = $0
     if ((getline t < (zone "/type")) > 0 && (getline v < (zone "/temp")) > 0) {
       close(zone "/type"); close(zone "/temp")
-      if (t ~ re) { printf "rackphone_temperature_celsius{zone=\"%s\"} %.1f\n", t, v / 1000.0; n++ }
+      if (t ~ re) printf "rackphone_temperature_celsius{zone=\"%s\"} %.1f\n", t, v / 1000.0
     }
   }
-  END { print "#COUNT " n + 0 > "/proc/self/fd/2" }
 ' 2>/dev/null)
 echo "$ZONES"
 

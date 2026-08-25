@@ -10,24 +10,15 @@
 set -u
 
 MODDIR=$(cd "${0%/*}/.." && pwd)
-RUN=/data/adb/rackphone/run
+# Sourced first: it defines RP_CONF, which the paths below depend on.
+. "$MODDIR/rackphone/cfg.sh"
+
+RUN="$RP_CONF/run"
 PIDFILE="$RUN/telemetry.pid"
 mkdir -p "$RUN"
 
-port() {
-  _p=$(getprop persist.rackphone.telemetry.listener_port 2>/dev/null)
-  [ -n "$_p" ] && { echo "$_p"; return; }
-  _p=$(sed -n 's/^[[:space:]]*telemetry\.listener_port=//p' /data/adb/rackphone/config.env 2>/dev/null | tail -1)
-  [ -n "$_p" ] && { echo "$_p"; return; }
-  sed -n 's/^[[:space:]]*listener_port=//p' "$MODDIR/rackphone/defaults.env" | tail -1
-}
-
-enabled() {
-  _e=$(getprop persist.rackphone.telemetry.listener_enabled 2>/dev/null)
-  [ -n "$_e" ] || _e=$(sed -n 's/^[[:space:]]*telemetry\.listener_enabled=//p' /data/adb/rackphone/config.env 2>/dev/null | tail -1)
-  [ -n "$_e" ] || _e=$(sed -n 's/^[[:space:]]*listener_enabled=//p' "$MODDIR/rackphone/defaults.env" | tail -1)
-  [ "$_e" = "1" ]
-}
+port()    { cfg listener_port; }
+enabled() { [ "$(cfg listener_enabled)" = "1" ]; }
 
 stop() {
   if [ -f "$PIDFILE" ]; then
@@ -60,9 +51,10 @@ start() {
 }
 
 case "${1:-start}" in
+  port)    port ;;
   start)   start ;;
   stop)    stop; echo stopped ;;
   restart) start ;;
   serve)   serve_once ;;
-  *) echo "usage: listener.sh {start|stop|restart|serve}" >&2; exit 2 ;;
+  *) echo "usage: listener.sh {start|stop|restart|serve|port}" >&2; exit 2 ;;
 esac

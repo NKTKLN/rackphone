@@ -104,4 +104,26 @@ assert_contains "guard window exported" "$BOUT" 'rackphone_battery_window_percen
 assert_contains "control node detected" "$BOUT" 'rackphone_battery_control_method_info{node="input_suspend"}'
 assert_not_contains "battery plugin does not emit telemetry families" "$BOUT" "rackphone_temperature_celsius{zone="
 
+section "Status reports what is actually configured"
+# Regression: status.sh once resolved the port from the property and the
+# built-in default only, skipping config.env. After a deploy set a port, status
+# reported the default while the listener bound the deployed one.
+STATUS="$REPO/modules/rackphone-telemetry/rackphone/status.sh"
+: > "$RACKPHONE_CONF_DIR/config.env"
+assert_contains "falls back to the built-in default port" "$(sh "$STATUS")" "port=9105"
+
+echo 'telemetry.listener_port=9999' > "$RACKPHONE_CONF_DIR/config.env"
+assert_contains "a deployed port is reported"  "$(sh "$STATUS")" "port=9999"
+assert_eq "and the listener resolves the same port" \
+  "$(sh "$REPO/modules/rackphone-telemetry/rackphone/listener.sh" port)" "9999"
+
+echo "persist.rackphone.telemetry.listener_port=8888" >> "$STUB_PROPS"
+assert_contains "a live override wins over the deployed value" "$(sh "$STATUS")" "port=8888"
+: > "$STUB_PROPS"; : > "$RACKPHONE_CONF_DIR/config.env"
+
+assert_contains "reports listener stopped when no pid file" "$(sh "$STATUS")" "listener=stopped"
+assert_contains "reports the total zone count"    "$(sh "$STATUS")" "zones_total=89"
+assert_contains "and only the exported subset"    "$(sh "$STATUS")" "zones_exported=15"
+assert_contains "root detected via the prefix"    "$(sh "$STATUS")" "root=yes"
+
 summary

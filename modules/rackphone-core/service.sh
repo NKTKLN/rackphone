@@ -2,7 +2,7 @@
 # Late-start service. Re-applies every persisted setting as a property so the
 # resolver behaves identically on a fresh boot and after a live change.
 MODDIR=${0%/*}
-CONF_DIR=/data/adb/rackphone
+CONF_DIR=${RACKPHONE_CONF_DIR:-/data/adb/rackphone}
 LOG="$CONF_DIR/run/core.log"
 
 # Wait for the property service and /data to be genuinely ready. sys.boot_completed
