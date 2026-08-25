@@ -1,20 +1,8 @@
 {
   "id": "core",
   "name": "Core",
-  "description": "Config store and plugin host.",
-  "settings": [
-    {
-      "key": "selinux_mode",
-      "type": "enum",
-      "default": "unchanged",
-      "values": ["unchanged", "enforcing", "permissive"],
-      "label": "SELinux mode at boot",
-      "help": "Leave as unchanged unless a plugin genuinely needs it. Permissive disables SELinux enforcement device-wide, which is a real security downgrade, not a tuning knob - and it does not survive a reboot on its own, which is why applying it is a setting rather than a one-off command."
-    }
-  ],
-  "actions": [
-    { "id": "selinux_permissive", "label": "Set SELinux permissive now" },
-    { "id": "selinux_enforcing", "label": "Set SELinux enforcing now" }
-  ],
+  "description": "Config store and plugin host. Reports unit health; has no settings of its own.",
+  "settings": [],
+  "actions": [],
   "status": ["selinux", "magisk", "plugins", "config"]
 }

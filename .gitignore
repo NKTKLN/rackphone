@@ -9,3 +9,7 @@ inventory/*.txt
 app/build/
 app/.dart_tool/
 dist/
+
+# Monitoring stack is deployment-local, not part of the tracked project.
+monitoring/
+compose.yml

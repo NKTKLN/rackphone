@@ -362,30 +362,6 @@ def cmd_toggle(args) -> int:
     return 0
 
 
-def cmd_selinux(args) -> int:
-    serial, name = _serial_for(args)
-    if args.mode is None:
-        render.info(adb.su_shell(serial, "rackphone selinux status").strip())
-        return 0
-    if args.mode == "permissive":
-        render.warn(
-            "Permissive disables SELinux enforcement device-wide for the whole "
-            "uptime. It is not a per-plugin exemption, and none of the shipped "
-            "plugins need it: the battery guard writes its sysfs nodes fine "
-            "under enforcing, from u:r:magisk:s0."
-        )
-    out = adb.su_shell(serial, f"rackphone selinux {args.mode}")
-    render.ok(out.strip())
-    if args.persist:
-        adb.rp(serial, ["set", "core.selinux_mode", args.mode])
-        render.dim(f"  persisted: core.selinux_mode = {args.mode}")
-        if _record_in_unit(name, "core.selinux_mode", args.mode):
-            render.dim(f"  recorded in {name}.env")
-    else:
-        render.dim("  not persisted; the kernel resets this on reboot (use --persist)")
-    return 0
-
-
 def cmd_deploy(args) -> int:
     unit = config.Unit.load(args.unit)
     serial = adb.resolve_serial(unit.serial)
@@ -517,10 +493,6 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("plugin")
     p = add("disable", cmd_toggle, "disable a plugin")
     p.add_argument("plugin")
-
-    p = add("selinux", cmd_selinux, "show or change SELinux mode")
-    p.add_argument("mode", nargs="?", choices=["enforcing", "permissive"])
-    p.add_argument("--persist", action="store_true", help="also apply at every boot")
 
     p = sub.add_parser("serve", help="expose all units to Prometheus")
     p.add_argument("--host", default="0.0.0.0")

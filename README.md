@@ -140,48 +140,6 @@ uv run --project cli rackphone disable telemetry
 uv run --project cli rackphone enable telemetry
 ```
 
-### SELinux
-
-The unit runs **enforcing**, and none of the shipped plugins need otherwise —
-the battery guard writes its sysfs nodes fine from `u:r:magisk:s0`. Relaxing it
-is available but deliberately awkward, because it is device-wide and permanent
-for the uptime rather than a per-plugin exemption:
-
-```sh
-uv run --project cli rackphone selinux                        # status
-uv run --project cli rackphone selinux permissive --persist   # and at every boot
-```
-
-Without `--persist` the kernel resets the mode on reboot. With it, the setting is
-applied by `rackphone-core`'s boot service, so a unit cannot silently revert to a
-mode a plugin was depending on.
-
-### Battery guard
-
-| Key | Default | What it does |
-| --- | --- | --- |
-| `battery.enabled` | `1` | Master switch |
-| `battery.max_percent` | `80` | Suspend charging at this level |
-| `battery.min_percent` | `60` | Resume charging below this level |
-| `battery.safety_floor` | `20` | Force resume below this, whatever else is set |
-| `battery.poll_interval` | `60` | Seconds between checks |
-| `battery.method` | `auto` | Charge-control node, or `auto` to probe |
-
-The window matters on this hardware. The unit's pack reports **3140 mAh against a
-4250 mAh design capacity — 74 % state of health** — after a life spent held at 100 %,
-which is exactly the condition a permanently-cabled phone sits in.
-
-### Telemetry
-
-| Key | Default | What it does |
-| --- | --- | --- |
-| `telemetry.thermal_include` | curated regex | Which of the 89 zones to publish |
-| `telemetry.net_include` | `rmnet*`, `wlan0`, `usb0`, `tun0`, `tailscale0` | Interfaces to publish |
-| `telemetry.collect_telephony` | `1` | Radio metrics; costs ~150 ms per scrape |
-| `telemetry.collect_diskstats` | `1` | Disk I/O counters |
-| `telemetry.listener_enabled` | `0` | On-device HTTP listener (loopback only) |
-| `telemetry.listener_port` | `9105` | Listener port |
-
 ## 🔌 Writing a plugin
 
 A Magisk module joins Rackphone by shipping a `rackphone/` directory. The CLI reads

@@ -86,14 +86,6 @@ set_enabled() {
   echo "$1 $2d (takes full effect after reboot)"
 }
 
-selinux_mode() {
-  case "${1:-status}" in
-    status)     getenforce ;;
-    permissive) setenforce 0 && echo "SELinux: permissive" ;;
-    enforcing)  setenforce 1 && echo "SELinux: enforcing" ;;
-    *) die "usage: rackphone selinux [status|permissive|enforcing]" ;;
-  esac
-}
 
 # ----------------------------------------------------------------- config ---
 
@@ -133,9 +125,18 @@ set_value() {
   _mod=$1; _key=$2; _val=$3
   plugin_dir "$_mod" >/dev/null || die "no such plugin: $_mod"
 
-  resetprop "persist.rackphone.$_mod.$_key" "$_val" 2>/dev/null \
-    || setprop "persist.rackphone.$_mod.$_key" "$_val" \
-    || die "could not set property (is this running as root?)"
+  # Android's property service silently rejects a value over PROP_VALUE_MAX
+  # (92 bytes): resetprop still exits 0 and getprop then returns empty. Checking
+  # the length up front is the only way to avoid reporting a write that did not
+  # happen. Long values live in config.env alone, which resolves identically -
+  # only the "live override" layer is unavailable to them.
+  if [ ${#_val} -gt 91 ]; then
+    echo "note: ${#_val} bytes exceeds the 92-byte property limit; stored in config.env only" >&2
+  else
+    resetprop "persist.rackphone.$_mod.$_key" "$_val" 2>/dev/null \
+      || setprop "persist.rackphone.$_mod.$_key" "$_val" \
+      || die "could not set property (is this running as root?)"
+  fi
 
   mkdir -p "$CONF_DIR"
   touch "$CONFIG"
@@ -264,7 +265,6 @@ rackphone - control surface for a Rackphone server unit
   rackphone plugins                 list all plugins with enabled/disabled state
   rackphone enable <plugin>         re-enable a disabled plugin
   rackphone disable <plugin>        disable a plugin (Magisk marker)
-  rackphone selinux [mode]          status | permissive | enforcing
   rackphone schema                  full JSON: declarations + effective values
   rackphone status                  live status JSON from every plugin
   rackphone metrics                 Prometheus exposition text
@@ -285,7 +285,6 @@ case "$cmd" in
   plugins) plugin_ids_all ;;
   enable)  [ $# -eq 1 ] || die "usage: rackphone enable <plugin>";  set_enabled "$1" enable ;;
   disable) [ $# -eq 1 ] || die "usage: rackphone disable <plugin>"; set_enabled "$1" disable ;;
-  selinux) selinux_mode "${1:-status}" ;;
   schema)  cmd_schema ;;
   status)  cmd_status ;;
   metrics) cmd_metrics ;;
