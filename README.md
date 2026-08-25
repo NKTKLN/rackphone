@@ -179,11 +179,35 @@ scripts/           module packaging, device inventory, Magisk install
 docs/              install walkthrough, plugin contract, metric reference
 ```
 
-## 🧪 Checks
+## 🧪 Tests
 
 ```sh
-sh -n modules/*/rackphone/*.sh modules/*/system/bin/rackphone
+./tests/run.sh
 ```
+
+**174 checks**: 54 pytest, 90 shell, 30 live-device. The device tests skip
+themselves when nothing is attached, so the suite runs on a machine with no phone.
+
+| Suite | Covers |
+| --- | --- |
+| `tests/test_resolve.sh` | Config precedence, plugin discovery, the property-length guard |
+| `tests/test_metrics.sh` | The exporter, run unmodified against a rebuilt device tree |
+| `tests/test_battery.sh` | Charge control and every path that must restore charging |
+| `cli/tests/` | Schema validation, unit files, label injection, device resolution |
+| `tests/test_integration.sh` | A real unit, the bridge, and Prometheus end to end |
+
+The shell suites run the **shipped scripts**, not copies. Module filesystem roots
+are prefixable (`RACKPHONE_SYS_ROOT`, `RACKPHONE_PROC_ROOT`, `RACKPHONE_CONF_DIR`)
+and empty in production, so what is tested is what ships. `tests/fixtures/`
+holds captured output from a real device — `dumpsys`, all 89 thermal zones,
+`/proc` — because parsers validated against invented input prove nothing. The
+radio fixture deliberately contains `Integer.MAX_VALUE` sentinels so the
+filtering that drops them stays tested.
+
+Writing tests found three bugs that had already shipped: a long value not
+clearing a stale property (so it silently never applied), `root_available`
+reading a hardcoded path, and `guard.sh` computing its log path before the
+override was in scope.
 
 ```sh
 uv run --project cli rackphone doctor

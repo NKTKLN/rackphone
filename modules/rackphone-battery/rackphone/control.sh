@@ -5,8 +5,9 @@
 # actually stop this phone from charging".
 set -u
 
-BAT=/sys/class/power_supply/battery
-RUN=/data/adb/rackphone/run
+SYS=${RACKPHONE_SYS_ROOT:-}
+BAT=$SYS/sys/class/power_supply/battery
+RUN=${RACKPHONE_CONF_DIR:-/data/adb/rackphone}/run
 STATE="$RUN/battery.method"
 
 # Candidate nodes, most preferred first. Each entry is: path:suspend:resume
@@ -16,8 +17,8 @@ STATE="$RUN/battery.method"
 # battery_charging_enabled exists under power_supply on this kernel, both live
 # under qcom-battery. The power_supply paths stay as fallbacks for other devices.
 CANDIDATES="
-/sys/class/qcom-battery/input_suspend:1:0
-/sys/class/qcom-battery/charging_enabled:0:1
+$SYS/sys/class/qcom-battery/input_suspend:1:0
+$SYS/sys/class/qcom-battery/charging_enabled:0:1
 $BAT/input_suspend:1:0
 $BAT/battery_charging_enabled:0:1
 $BAT/charging_enabled:0:1
@@ -67,7 +68,7 @@ method_entry() {
 rp_cfg() {
   _v=$(getprop "persist.rackphone.battery.$1" 2>/dev/null)
   [ -n "$_v" ] && { echo "$_v"; return; }
-  _v=$(sed -n "s/^[[:space:]]*battery\.$1=//p" /data/adb/rackphone/config.env 2>/dev/null | tail -1)
+  _v=$(sed -n "s/^[[:space:]]*battery\.$1=//p" ${RACKPHONE_CONF_DIR:-/data/adb/rackphone}/config.env 2>/dev/null | tail -1)
   [ -n "$_v" ] && { echo "$_v"; return; }
   sed -n "s/^[[:space:]]*$1=//p" "$(cd "${0%/*}" && pwd)/defaults.env" 2>/dev/null | tail -1
 }

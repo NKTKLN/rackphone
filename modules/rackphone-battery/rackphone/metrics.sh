@@ -30,7 +30,7 @@ entry=$(method_entry 2>/dev/null) && {
 
 # Xiaomi fuel-gauge extras. Present only on this vendor tree, so every read is
 # guarded rather than assumed - a sibling device would simply export fewer series.
-QB=/sys/class/qcom-battery
+QB=${RACKPHONE_SYS_ROOT:-}/sys/class/qcom-battery
 emit_node() {
   [ -r "$2" ] || return 0
   v=$(cat "$2" 2>/dev/null)

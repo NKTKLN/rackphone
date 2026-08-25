@@ -218,6 +218,21 @@ def cmd_get(args) -> int:
     return 0
 
 
+def cmd_origin(args) -> int:
+    """Which layer supplied a value: prop, config, or default.
+
+    Machine-readable on purpose - `config` renders a table for humans and rich
+    truncates long keys to fit the terminal, so scripts should ask here.
+    """
+    serial, _ = _serial_for(args)
+    plugin_id, key = _split(args.key)
+    schema = plugins.fetch(serial)
+    plugin = schema.plugin(plugin_id)
+    plugin.setting(key)
+    print(plugin.origin(key))
+    return 0
+
+
 def cmd_set(args) -> int:
     serial, name = _serial_for(args)
     plugin_id, key = _split(args.key)
@@ -457,6 +472,9 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("plugin", nargs="?", help="limit to one plugin")
 
     p = add("get", cmd_get, "read one setting")
+    p.add_argument("key", metavar="PLUGIN.KEY")
+
+    p = add("origin", cmd_origin, "which layer supplied a value")
     p.add_argument("key", metavar="PLUGIN.KEY")
 
     p = add("set", cmd_set, "change one setting (validated against the schema)")

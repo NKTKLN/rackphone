@@ -18,7 +18,13 @@
 set -u
 
 MODDIR=$(cd "${0%/*}/.." && pwd)
-CONFIG=/data/adb/rackphone/config.env
+
+# Filesystem roots are prefixable so the exporter can be run on a workstation
+# against a captured fixture tree. Empty in production, so the tested code path
+# is byte-for-byte the shipped one.
+SYS=${RACKPHONE_SYS_ROOT:-}
+PROC=${RACKPHONE_PROC_ROOT:-}
+CONFIG=${RACKPHONE_CONF_DIR:-/data/adb/rackphone}/config.env
 
 cfg() {
   _v=$(getprop "persist.rackphone.telemetry.$1" 2>/dev/null)
@@ -92,7 +98,7 @@ dumpsys battery 2>/dev/null | awk '
 
 # Root-only extras. Absent without Magisk, which is fine - the app surfaces
 # `root` in status so the missing series are explained rather than mysterious.
-BAT=/sys/class/power_supply/battery
+BAT=$SYS/sys/class/power_supply/battery
 if [ -r "$BAT/current_now" ]; then
   cn=$(cat "$BAT/current_now" 2>/dev/null)
   [ -n "$cn" ] && echo "rackphone_battery_current_amperes $(awk -v v="$cn" 'BEGIN{printf "%.4f", v/1000000.0}')"
@@ -106,7 +112,7 @@ fi
 
 echo "# HELP rackphone_temperature_celsius Thermal zone temperature."
 echo "# TYPE rackphone_temperature_celsius gauge"
-ZONES=$(printf '%s\n' /sys/class/thermal/thermal_zone* | awk -v re="$THERMAL_RE" '
+ZONES=$(printf '%s\n' "$SYS"/sys/class/thermal/thermal_zone* | awk -v re="$THERMAL_RE" '
   {
     zone = $0
     if ((getline t < (zone "/type")) > 0 && (getline v < (zone "/temp")) > 0) {
@@ -124,7 +130,7 @@ echo "# HELP rackphone_cpu_frequency_hertz Current scaling frequency per core."
 echo "# TYPE rackphone_cpu_frequency_hertz gauge"
 echo "# HELP rackphone_cpu_online Whether the core is online."
 echo "# TYPE rackphone_cpu_online gauge"
-printf '%s\n' /sys/devices/system/cpu/cpu[0-9]* | awk '
+printf '%s\n' "$SYS"/sys/devices/system/cpu/cpu[0-9]* | awk '
   {
     d = $0
     n = d; sub(/.*cpu/, "", n)
@@ -141,7 +147,7 @@ printf '%s\n' /sys/devices/system/cpu/cpu[0-9]* | awk '
 
 echo "# HELP rackphone_load1 1-minute load average."
 echo "# TYPE rackphone_load1 gauge"
-awk '{ printf "rackphone_load1 %s\nrackphone_load5 %s\nrackphone_load15 %s\n", $1, $2, $3 }' /proc/loadavg 2>/dev/null
+awk '{ printf "rackphone_load1 %s\nrackphone_load5 %s\nrackphone_load15 %s\n", $1, $2, $3 }' "$PROC"/proc/loadavg 2>/dev/null
 
 echo "# HELP rackphone_cpu_seconds_total Cumulative CPU time by mode."
 echo "# TYPE rackphone_cpu_seconds_total counter"
@@ -153,11 +159,11 @@ awk '
       if ($(i+1) != "") printf "rackphone_cpu_seconds_total{mode=\"%s\"} %.2f\n", m[i], $(i+1) / hz
     exit
   }
-' /proc/stat 2>/dev/null
+' "$PROC"/proc/stat 2>/dev/null
 
 echo "# HELP rackphone_uptime_seconds Seconds since boot."
 echo "# TYPE rackphone_uptime_seconds gauge"
-awk '{ printf "rackphone_uptime_seconds %.2f\n", $1 }' /proc/uptime 2>/dev/null
+awk '{ printf "rackphone_uptime_seconds %.2f\n", $1 }' "$PROC"/proc/uptime 2>/dev/null
 
 # ---------------------------------------------------------------- memory ---
 
@@ -173,13 +179,13 @@ awk '
   /^SwapTotal:/    { st = $2; emit("swap_total", $2) }
   /^SwapFree:/     { sf = $2; emit("swap_free", $2) }
   END { if (st != "" && sf != "") emit("swap_used", st - sf) }
-' /proc/meminfo 2>/dev/null
+' "$PROC"/proc/meminfo 2>/dev/null
 
 # --------------------------------------------------------------- storage ---
 
 echo "# HELP rackphone_filesystem_bytes Filesystem size and free space."
 echo "# TYPE rackphone_filesystem_bytes gauge"
-df -k /data 2>/dev/null | awk '
+df -k "${RACKPHONE_DATA_DIR:-/data}" 2>/dev/null | awk '
   NR == 2 {
     printf "rackphone_filesystem_bytes{mount=\"/data\",kind=\"size\"} %d\n", $2 * 1024
     printf "rackphone_filesystem_bytes{mount=\"/data\",kind=\"used\"} %d\n", $3 * 1024
@@ -196,7 +202,7 @@ if [ "$DO_DISK" = "1" ]; then
       printf "rackphone_disk_bytes_total{device=\"%s\",op=\"read\"} %d\n",  $3, $6 * 512
       printf "rackphone_disk_bytes_total{device=\"%s\",op=\"write\"} %d\n", $3, $10 * 512
     }
-  ' /proc/diskstats 2>/dev/null
+  ' "$PROC"/proc/diskstats 2>/dev/null
 fi
 
 # --------------------------------------------------------------- network ---
@@ -214,7 +220,7 @@ awk -v re="$NET_RE" '
     printf "rackphone_network_errors_total{interface=\"%s\",direction=\"rx\"} %d\n", iface, $4
     printf "rackphone_network_errors_total{interface=\"%s\",direction=\"tx\"} %d\n", iface, $12
   }
-' /proc/net/dev 2>/dev/null
+' "$PROC"/proc/net/dev 2>/dev/null
 
 # --------------------------------------------------------------- radio ---
 
@@ -283,4 +289,4 @@ if [ "$START_MS" != "0" ] && [ "$END_MS" != "0" ]; then
 fi
 echo "# HELP rackphone_root_available Whether privileged sysfs reads succeed."
 echo "# TYPE rackphone_root_available gauge"
-echo "rackphone_root_available $([ -r /sys/class/power_supply/battery/current_now ] && echo 1 || echo 0)"
+echo "rackphone_root_available $([ -r "$BAT/current_now" ] && echo 1 || echo 0)"

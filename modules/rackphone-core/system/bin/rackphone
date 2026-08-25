@@ -25,9 +25,12 @@
 
 set -u
 
-CONF_DIR=/data/adb/rackphone
+# Paths are overridable so the resolver can be exercised on a workstation
+# against fixture directories. On a device nothing sets these and the defaults
+# apply, so the tested code path is the shipped one.
+CONF_DIR=${RACKPHONE_CONF_DIR:-/data/adb/rackphone}
 CONFIG="$CONF_DIR/config.env"
-MODULES_DIR=/data/adb/modules
+MODULES_DIR=${RACKPHONE_MODULES_DIR:-/data/adb/modules}
 RUN_DIR="$CONF_DIR/run"
 
 die() { echo "rackphone: $*" >&2; exit 1; }
@@ -131,6 +134,10 @@ set_value() {
   # happen. Long values live in config.env alone, which resolves identically -
   # only the "live override" layer is unavailable to them.
   if [ ${#_val} -gt 91 ]; then
+    # Clearing any existing property is not optional: without it a previously
+    # set short value keeps winning the precedence order and the long value
+    # silently never takes effect.
+    resetprop -d "persist.rackphone.$_mod.$_key" 2>/dev/null || true
     echo "note: ${#_val} bytes exceeds the 92-byte property limit; stored in config.env only" >&2
   else
     resetprop "persist.rackphone.$_mod.$_key" "$_val" 2>/dev/null \

@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+[ -n "${STUB_PROPS:-}" ] || exit 0
+if [ "$1" = "-d" ]; then
+  grep -v "^$2=" "$STUB_PROPS" > "$STUB_PROPS.tmp" 2>/dev/null || true
+  mv "$STUB_PROPS.tmp" "$STUB_PROPS"
+  exit 0
+fi
+grep -v "^$1=" "$STUB_PROPS" > "$STUB_PROPS.tmp" 2>/dev/null || true
+mv "$STUB_PROPS.tmp" "$STUB_PROPS"
+echo "$1=$2" >> "$STUB_PROPS"

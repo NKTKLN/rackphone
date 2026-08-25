@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+# Replays captured device output so the parsers are tested against reality.
+case "$1" in
+  battery)            cat "$FIXTURES/dumpsys_battery.txt" ;;
+  telephony.registry) cat "$FIXTURES/telephony_registry.txt" ;;
+  *) exit 1 ;;
+esac

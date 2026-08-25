@@ -9,7 +9,7 @@ set -u
 
 MODDIR=$(cd "${0%/*}/.." && pwd)
 RP="$MODDIR/rackphone"
-RUN=/data/adb/rackphone/run
+RUN=${RACKPHONE_CONF_DIR:-/data/adb/rackphone}/run
 LOG="$RUN/battery.log"
 PIDFILE="$RUN/battery.pid"
 mkdir -p "$RUN"

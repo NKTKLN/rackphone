@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+# Reads from a flat file so a test can set the highest-precedence layer.
+[ -n "${STUB_PROPS:-}" ] && [ -f "$STUB_PROPS" ] || exit 0
+sed -n "s|^$1=||p" "$STUB_PROPS" | tail -1

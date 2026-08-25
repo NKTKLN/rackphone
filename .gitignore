@@ -13,3 +13,5 @@ dist/
 # Monitoring stack is deployment-local, not part of the tracked project.
 monitoring/
 compose.yml
+tests/.tree/
+.pytest_cache/
