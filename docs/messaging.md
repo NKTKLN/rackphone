@@ -119,6 +119,24 @@ uv run --project cli rackphone gateway --once     # drain once and exit
 Binds `127.0.0.1:9106` by default with no auth. Set `api_token` **before**
 widening the bind — the API serves message content.
 
+## Notification format
+
+```text
+SMS from +79001234567          Missed call
+Код подтверждения: 4821        +79001234567
+```
+
+No timestamp in the body. ntfy stamps every message on arrival, and repeating
+it was noise. The event time — which is when the phone received it, not when it
+was pushed — stays in the store and on the API.
+
+The number is in the title for SMS (where the body carries the message) and in
+the body for calls (where the title carries the call type), so the two lines
+never repeat each other.
+
+Priorities are reserved rather than decorative: a **missed** call is `urgent`,
+because on an unattended unit that is the event actually worth interrupting for.
+
 ## Privacy
 
 This pipes message content off the phone into a host database and onward to

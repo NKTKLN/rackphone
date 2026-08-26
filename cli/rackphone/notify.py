@@ -3,6 +3,10 @@
 Only events the store reports as *new* are forwarded, so the device's
 at-least-once redelivery cannot produce a duplicate alert - the UNIQUE
 constraint in store.py is doing double duty as the dedup for this.
+
+Notifications carry no timestamp of their own: ntfy stamps each message on
+arrival, and repeating it in the body was noise. The event time is still
+recorded in the store and served on the API.
 """
 
 from __future__ import annotations
@@ -14,12 +18,6 @@ import httpx
 
 from .gwconfig import NtfyConfig
 from .store import Event
-
-
-def _pretty_ts(ms: int | None) -> str:
-    if not ms:
-        return ""
-    return time.strftime("%H:%M", time.localtime(ms / 1000))
 
 
 @dataclass
@@ -45,7 +43,6 @@ class Notification:
 
 def render(event: Event, cfg: NtfyConfig) -> Notification:
     who = event.address or "unknown"
-    when = _pretty_ts(event.ts)
 
     if event.kind == "sms":
         body = event.body
@@ -55,7 +52,7 @@ def render(event: Event, cfg: NtfyConfig) -> Notification:
             body = "(body not relayed)"
         return Notification(
             title=f"SMS from {who}",
-            message=body if not when else f"{body}\n\n{when}",
+            message=body,
             priority=cfg.priority_sms,
             tags="envelope",
         )
@@ -67,10 +64,11 @@ def render(event: Event, cfg: NtfyConfig) -> Notification:
         detail = f"{who}"
         if event.duration:
             detail += f" · {event.duration}s"
-        if when:
-            detail += f" · {when}"
+        # The number lives in the message, not the title. With the timestamp
+        # gone there is nothing else for the body to carry, and repeating the
+        # number in both places just wastes the notification's two lines.
         return Notification(
-            title=f"{label} from {who}",
+            title=label,
             message=detail,
             # A missed call on an unattended unit is the thing most worth
             # interrupting for, so it outranks one that was answered.

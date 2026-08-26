@@ -52,7 +52,7 @@ def stub():
 class TestRendering:
     def test_sms_titles_with_the_sender(self):
         n = render(ev(), NtfyConfig())
-        assert "+15550001" in n.title and "hello" in n.message
+        assert "+15550001" in n.title and n.message == "hello"
 
     def test_missing_body_is_stated_not_invented(self):
         # include_body=0: say a message arrived, do not fabricate content.
@@ -69,6 +69,18 @@ class TestRendering:
     def test_call_labels_match_direction(self):
         for direction, word in [("in", "Incoming"), ("missed", "Missed"), ("rejected", "Rejected")]:
             assert word in render(ev(kind="call", direction=direction), NtfyConfig()).title
+
+    def test_call_title_and_body_do_not_repeat_the_number(self):
+        # With no timestamp to carry, a body that just echoes the title wastes
+        # the two lines a notification gets.
+        n = render(ev(kind="call", direction="missed"), NtfyConfig())
+        assert "+15550001" in n.message
+        assert "+15550001" not in n.title
+
+    def test_notifications_carry_no_timestamp(self):
+        # ntfy stamps arrival itself; the event time is served on the API.
+        n = render(ev(body="hello"), NtfyConfig())
+        assert n.message == "hello"
 
     def test_headers_never_contain_a_newline(self):
         # A raw newline in a header value terminates it and corrupts the request.
