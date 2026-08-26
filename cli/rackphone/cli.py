@@ -70,7 +70,11 @@ def cmd_units(args) -> int:
     live = {d.serial for d in adb.devices() if d.usable}
     rows = []
     for unit in config.all_units():
-        online = unit.serial in live if unit.serial else False
+        # A blank serial is a supported state, not a broken one: it means
+        # "whatever single device is attached", which is what resolve_serial
+        # does. Reporting that as offline while the phone is plugged in would
+        # be wrong.
+        online = (unit.serial in live) if unit.serial else (len(live) == 1)
         rows.append([
             unit.name,
             unit.serial or Text("auto", style="dim"),
