@@ -137,6 +137,16 @@ never repeat each other.
 Priorities are reserved rather than decorative: a **missed** call is `urgent`,
 because on an unattended unit that is the event actually worth interrupting for.
 
+Tags are plain words rather than emoji shortcodes — ntfy renders an unrecognised
+tag as a text label, and these double as filter terms in the app:
+
+| Event | Tags |
+| --- | --- |
+| SMS | `rackphone,sms` |
+| Incoming call | `rackphone,call,incoming` |
+| Missed call | `rackphone,call,missed` |
+| Rejected / blocked | `rackphone,call,rejected` / `,blocked` |
+
 ## Privacy
 
 This pipes message content off the phone into a host database and onward to

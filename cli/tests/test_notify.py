@@ -77,6 +77,17 @@ class TestRendering:
         assert "+15550001" in n.message
         assert "+15550001" not in n.title
 
+    def test_tags_are_plain_words_not_emoji_shortcodes(self):
+        # ntfy turns a recognised shortcode into an emoji; plain words stay as
+        # text labels and double as filter terms.
+        assert render(ev(), NtfyConfig()).tags == "rackphone,sms"
+        assert render(ev(kind="call", direction="missed"), NtfyConfig()).tags == "rackphone,call,missed"
+        assert render(ev(kind="call", direction="in"), NtfyConfig()).tags == "rackphone,call,incoming"
+
+    def test_every_notification_is_tagged_rackphone(self):
+        for e in (ev(), ev(kind="call", direction="in"), ev(kind="other")):
+            assert render(e, NtfyConfig()).tags.startswith("rackphone")
+
     def test_notifications_carry_no_timestamp(self):
         # ntfy stamps arrival itself; the event time is served on the API.
         n = render(ev(body="hello"), NtfyConfig())

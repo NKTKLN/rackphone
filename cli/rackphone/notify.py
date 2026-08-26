@@ -54,7 +54,9 @@ def render(event: Event, cfg: NtfyConfig) -> Notification:
             title=f"SMS from {who}",
             message=body,
             priority=cfg.priority_sms,
-            tags="envelope",
+            # Plain words, not emoji shortcodes: ntfy renders an unrecognised
+            # tag as a text label, and these double as filter terms in the app.
+            tags="rackphone,sms",
         )
 
     if event.kind == "call":
@@ -73,14 +75,14 @@ def render(event: Event, cfg: NtfyConfig) -> Notification:
             # A missed call on an unattended unit is the thing most worth
             # interrupting for, so it outranks one that was answered.
             priority="urgent" if direction == "missed" else cfg.priority_call,
-            tags="telephone_receiver" if direction == "in" else "phone",
+            tags=f"rackphone,call,{'incoming' if direction == 'in' else direction}",
         )
 
     return Notification(
         title=f"{event.kind} event",
         message=str(event.raw),
         priority="low",
-        tags="grey_question",
+        tags=f"rackphone,{event.kind}",
     )
 
 
