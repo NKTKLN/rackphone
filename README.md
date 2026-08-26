@@ -11,6 +11,7 @@
 [![Proxmox](https://img.shields.io/badge/Proxmox-host-E57000?logo=proxmox&logoColor=white)](https://www.proxmox.com/)
 [![Docker](https://img.shields.io/badge/Docker-compose-2496ED?logo=docker&logoColor=white)](https://www.docker.com/)
 [![uv](https://img.shields.io/badge/uv-managed-DE5FE9?logo=uv&logoColor=white)](https://github.com/astral-sh/uv)
+[![License](https://img.shields.io/badge/License-MIT-blue)](LICENSE)
 [![Made with Claude Code](https://img.shields.io/badge/Made%20with-Claude%20Code-D97757?logo=claude&logoColor=white)](https://claude.com/claude-code)
 
 **Rackphone** turns a retired Android phone into a monitored server unit. A Xiaomi
@@ -225,3 +226,7 @@ that class of divergence impossible rather than merely unlikely.
 ```sh
 uv run --project cli rackphone doctor
 ```
+
+## 📜 License
+
+[MIT](LICENSE)
