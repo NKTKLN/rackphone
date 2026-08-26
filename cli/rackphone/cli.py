@@ -427,6 +427,54 @@ def cmd_metrics(args) -> int:
     return 0
 
 
+def cmd_gateway(args) -> int:
+    """Drain messaging events into the store, and serve the API over them."""
+    import uvicorn
+
+    from .api import create_app
+    from .gateway import Gateway
+    from .gwconfig import GatewayConfig
+    from .notify import Forwarder
+    from .store import Store
+
+    cfg = GatewayConfig.load()
+    if args.port:
+        cfg.api_port = args.port
+    if args.host:
+        cfg.api_host = args.host
+
+    store = Store(cfg.db_path or None)
+    forwarder = Forwarder(cfg.ntfy) if cfg.ntfy.configured else None
+    gw = Gateway(cfg, store, forwarder)
+
+    if not cfg.ntfy.configured:
+        render.warn("ntfy is not configured; events are stored and served but not pushed")
+        render.dim(f"  set ntfy.url and ntfy.topic in {cfg.redacted()['config']}")
+
+    if args.once:
+        n = gw.tick()
+        render.ok(f"drained {gw.stats['drained']} event(s), {n} new, {gw.stats['pushed']} pushed")
+        if gw.stats["push_failed"]:
+            render.warn(f"  {gw.stats['push_failed']} push failure(s)")
+        return 1 if gw.stats["errors"] else 0
+
+    gw.start_background()
+    app = create_app(cfg, store, gw)
+    render.ok(f"API on http://{cfg.api_host}:{cfg.api_port}  (docs at /docs)")
+    uvicorn.run(app, host=cfg.api_host, port=cfg.api_port, log_level="warning")
+    return 0
+
+
+def cmd_gwconfig(args) -> int:
+    """Show the resolved gateway config. Secrets are shown as set/unset only."""
+    from .gwconfig import GatewayConfig
+
+    cfg = GatewayConfig.load()
+    render.table("Gateway configuration", ["KEY", "VALUE"],
+                 [[k, str(v)] for k, v in cfg.redacted().items()])
+    return 0
+
+
 def cmd_serve(args) -> int:
     serve.serve(args.host, args.port, args.unit or None)
     return 0
@@ -511,6 +559,15 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("plugin")
     p = add("disable", cmd_toggle, "disable a plugin")
     p.add_argument("plugin")
+
+    p = sub.add_parser("gateway", help="relay SMS and calls, and serve the API")
+    p.add_argument("--host", default=None)
+    p.add_argument("--port", type=int, default=None)
+    p.add_argument("--once", action="store_true", help="drain once and exit")
+    p.set_defaults(func=cmd_gateway)
+
+    p = sub.add_parser("gwconfig", help="show the resolved gateway config")
+    p.set_defaults(func=cmd_gwconfig)
 
     p = sub.add_parser("serve", help="expose all units to Prometheus")
     p.add_argument("--host", default="0.0.0.0")

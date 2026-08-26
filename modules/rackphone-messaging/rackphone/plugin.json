@@ -1,0 +1,62 @@
+{
+  "id": "messaging",
+  "name": "Messaging",
+  "description": "Relays incoming SMS and incoming calls to the host.",
+  "icon": "message",
+  "settings": [
+    { "key": "enabled", "type": "bool", "default": "1", "label": "Enable collection" },
+    { "key": "collect_sms", "type": "bool", "default": "1", "label": "Collect SMS" },
+    { "key": "collect_calls", "type": "bool", "default": "1", "label": "Collect calls" },
+    {
+      "key": "call_types",
+      "type": "enum",
+      "default": "in,missed",
+      "values": ["in", "missed", "in,missed", "in,missed,rejected", "all"],
+      "label": "Call types to relay",
+      "help": "Missed is in the default because on an unattended unit a missed call is the event actually worth alerting on. Outgoing is excluded unless you pick all."
+    },
+    {
+      "key": "poll_seconds",
+      "type": "int",
+      "default": "5",
+      "min": 2,
+      "max": 300,
+      "label": "Poll interval",
+      "unit": "s",
+      "help": "How long a message can sit before the host sees it. Calls are sampled on the same tick."
+    },
+    {
+      "key": "include_body",
+      "type": "bool",
+      "default": "1",
+      "label": "Include message bodies",
+      "help": "Turn off to relay only sender and timestamp. The host then knows a message arrived without the content ever leaving the phone."
+    },
+    {
+      "key": "spool_max_events",
+      "type": "int",
+      "default": "2000",
+      "min": 100,
+      "max": 50000,
+      "label": "Spool cap",
+      "help": "Oldest events are dropped past this. Bounds disk use if the host stops draining; the drop is counted and exported."
+    },
+    {
+      "key": "backfill_on_first_run",
+      "type": "int",
+      "default": "0",
+      "min": 0,
+      "max": 500,
+      "label": "Backfill on first run",
+      "help": "How many existing entries to relay when the cursor is first initialised. 0 means start from now, which is almost always what you want."
+    }
+  ],
+  "actions": [
+    { "id": "drain", "label": "Drain pending events" },
+    { "id": "peek", "label": "Show pending without consuming" },
+    { "id": "ack", "label": "Confirm the last drain" },
+    { "id": "reset_cursor", "label": "Reset to now (drops pending)" },
+    { "id": "selftest", "label": "Check the collector can read its sources" }
+  ],
+  "status": ["collector", "pending", "sms_cursor", "call_cursor", "dropped", "sources"]
+}

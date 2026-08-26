@@ -15,3 +15,7 @@ monitoring/
 compose.yml
 tests/.tree/
 .pytest_cache/
+
+# Holds an ntfy credential; the example file is the tracked one.
+gateway.toml
+tests/.tree-msg/

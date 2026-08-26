@@ -49,7 +49,7 @@ print("  defaults.env agrees with plugin.json" if not bad else "")
 sys.exit(bad)
 PY
 
-for t in test_resolve test_metrics test_battery; do
+for t in test_resolve test_metrics test_battery test_messaging; do
   banner "${t#test_}"
   bash "$HERE/$t.sh" || RC=1
 done

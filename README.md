@@ -174,6 +174,7 @@ modules/           Magisk modules, one directory per plugin
   rackphone-core/       config store, plugin discovery, on-device `rackphone`
   rackphone-telemetry/  Prometheus collector
   rackphone-battery/    charge-window guard
+  rackphone-messaging/  incoming SMS and call relay
 units/             declared state, one file per phone
 scripts/           module packaging, device inventory, Magisk install
 docs/              install walkthrough, plugin contract, metric reference
@@ -185,7 +186,7 @@ docs/              install walkthrough, plugin contract, metric reference
 ./tests/run.sh
 ```
 
-**187 checks**: 54 pytest, 103 shell, 30 live-device. The device tests skip
+**263 checks**: 95 pytest, 141 shell, 27 live-device. The device tests skip
 themselves when nothing is attached, so the suite runs on a machine with no phone.
 
 | Suite | Covers |
@@ -193,7 +194,8 @@ themselves when nothing is attached, so the suite runs on a machine with no phon
 | `tests/test_resolve.sh` | Config precedence, plugin discovery, the property-length guard |
 | `tests/test_metrics.sh` | The exporter, run unmodified against a rebuilt device tree |
 | `tests/test_battery.sh` | Charge control and every path that must restore charging |
-| `cli/tests/` | Schema validation, unit files, label injection, device resolution |
+| `tests/test_messaging.sh` | Collectors, spool delivery contract, incoming-only filtering |
+| `cli/tests/` | Schema validation, unit files, label injection, device resolution, store dedup, ntfy shaping |
 | `tests/test_integration.sh` | A real unit, the bridge, and Prometheus end to end |
 
 The shell suites run the **shipped scripts**, not copies. Module filesystem roots

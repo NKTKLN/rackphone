@@ -1,0 +1,21 @@
+# Copy to ~/.config/rackphone/gateway.toml and fill in.
+# Never commit the filled-in copy: it holds an ntfy credential.
+
+[gateway]
+poll_seconds = 5
+api_host = "127.0.0.1"
+api_port = 9106
+# api_token = "generate-a-long-random-string"
+
+[ntfy]
+# Leave url empty to store and serve events without pushing anywhere.
+url = ""
+topic = ""
+user = ""
+password = ""
+# token = ""       # preferred over user/password when your ntfy supports it
+
+priority_sms = "default"
+priority_call = "high"
+timeout = 10.0
+retries = 3
