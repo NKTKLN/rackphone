@@ -15,7 +15,18 @@ monitoring/
 compose.yml
 tests/.tree/
 .pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+.coverage.*
+coverage.xml
 
 # Holds an ntfy credential; the example file is the tracked one.
 gateway.toml
 tests/.tree-msg/
+
+# Локальная инструкция по развёртыванию, не для публикации.
+DEPLOY.local.md
+
+# Черновики вырезанных кусков документации, не для публикации.
+tmp/

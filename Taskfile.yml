@@ -1,0 +1,248 @@
+version: '3'
+
+# The Python project lives in cli/, so every uv task runs from there. Tasks that
+# touch the Magisk modules or the shell suite run from the repository root.
+vars:
+  CLI_DIR: cli
+  APP_DIR: app
+
+tasks:
+  # ======== Environment ========
+  sync:
+    desc: Sync dependencies (dev group) using uv
+    dir: '{{.CLI_DIR}}'
+    cmds:
+      - uv sync --all-groups
+
+  sync-frozen:
+    desc: Sync dependencies using locked versions
+    dir: '{{.CLI_DIR}}'
+    cmds:
+      - uv sync --frozen --all-groups
+
+  init:
+    desc: Full project setup
+    cmds:
+      - task: sync
+      - task: precommit
+
+  # ======== Pre-commit ========
+  precommit:
+    desc: Install git hooks
+    dir: '{{.CLI_DIR}}'
+    cmds:
+      - uv run pre-commit install --install-hooks --hook-type pre-commit --hook-type commit-msg --hook-type pre-push
+
+  precommit-run:
+    desc: Run pre-commit on all files
+    dir: '{{.CLI_DIR}}'
+    cmds:
+      - uv run pre-commit run --all-files
+
+  # ======== Commitizen ========
+  cz-commit:
+    desc: Commit using Conventional Commits
+    dir: '{{.CLI_DIR}}'
+    cmds:
+      - uv run cz commit
+
+  cz-check:
+    desc: Check commit messages
+    dir: '{{.CLI_DIR}}'
+    cmds:
+      - uv run cz check --rev-range origin/main..HEAD
+
+  cz-bump:
+    desc: Bump version and update changelog
+    dir: '{{.CLI_DIR}}'
+    cmds:
+      - uv run cz bump
+
+  # ======== Formatting ========
+  fmt:
+    desc: Auto-fix lint issues and format code
+    dir: '{{.CLI_DIR}}'
+    cmds:
+      - uv run ruff format .
+      - uv run ruff check . --fix
+
+  fmt-unsafe:
+    desc: Auto-fix lint issues using unsafe fixes and format code
+    dir: '{{.CLI_DIR}}'
+    cmds:
+      - uv run ruff format .
+      - uv run ruff check . --fix --unsafe-fixes
+
+  fmt-check:
+    desc: Check code formatting
+    dir: '{{.CLI_DIR}}'
+    cmds:
+      - uv run ruff format --check .
+
+  # ======== Static analysis ========
+  ruff:
+    desc: Run Ruff lint
+    dir: '{{.CLI_DIR}}'
+    cmds:
+      - uv run ruff check .
+
+  typecheck:
+    desc: Run MyPy
+    dir: '{{.CLI_DIR}}'
+    cmds:
+      - uv run mypy .
+
+  lint:
+    desc: Run Ruff and MyPy
+    cmds:
+      - task: ruff
+      - task: fmt-check
+      - task: typecheck
+
+  # ======== Dependency hygiene ========
+  audit:
+    desc: Security audit
+    dir: '{{.CLI_DIR}}'
+    cmds:
+      - uv run pip-audit
+
+  unused-libs:
+    desc: Detect unused dependencies
+    dir: '{{.CLI_DIR}}'
+    cmds:
+      - uv run deptry .
+
+  # ======== Full quality gate ========
+  check:
+    desc: Run full quality checks
+    cmds:
+      - task: lint
+      - task: test-cov
+      - task: build
+      - task: audit
+      - task: unused-libs
+
+  ci:
+    desc: Run CI checks locally
+    cmds:
+      - task: lint
+      - task: test-cov
+      - task: build
+
+  ci-frozen:
+    desc: Run CI checks with locked dependencies
+    cmds:
+      - task: sync-frozen
+      - task: lint
+      - task: test-cov
+      - task: build
+
+  # ======== Tests ========
+  test:
+    desc: Run tests
+    dir: '{{.CLI_DIR}}'
+    cmds:
+      - uv run pytest
+
+  test-cov:
+    desc: Run tests with coverage
+    dir: '{{.CLI_DIR}}'
+    cmds:
+      - uv run pytest --cov --cov-report=term-missing --cov-report=xml
+
+  test-shell:
+    desc: Run the on-host shell suite for the Magisk modules
+    cmds:
+      - bash tests/run.sh
+
+  # ======== Run app ========
+  run:
+    desc: Run the CLI (pass arguments after --)
+    dir: '{{.CLI_DIR}}'
+    cmds:
+      - uv run rackphone {{.CLI_ARGS}}
+
+  # ======== Magisk modules ========
+  modules:
+    desc: Build the Magisk module zips into dist/
+    cmds:
+      - bash scripts/build-modules.sh
+
+  # ======== Companion app ========
+  # The Flutter app that holds SEND_SMS. Needs the Flutter SDK on PATH, and an
+  # Android SDK for anything past `app-test`.
+  app-deps:
+    desc: Resolve the companion app's Dart dependencies
+    dir: '{{.APP_DIR}}'
+    cmds:
+      - flutter pub get
+
+  app-lint:
+    desc: Analyse and format-check the companion app
+    dir: '{{.APP_DIR}}'
+    cmds:
+      - dart format --output=none --set-exit-if-changed .
+      - flutter analyze
+
+  app-test:
+    desc: Run the companion app's Dart tests
+    dir: '{{.APP_DIR}}'
+    cmds:
+      - flutter test
+
+  app-test-native:
+    desc: Run the companion app's Kotlin unit tests
+    dir: '{{.APP_DIR}}'
+    cmds:
+      # Flutter does not track the Gradle wrapper, so regenerate it first.
+      - flutter build apk --config-only
+      - android/gradlew -p android :app:testDebugUnitTest
+
+  app-build:
+    desc: Build the companion APK
+    dir: '{{.APP_DIR}}'
+    cmds:
+      - flutter build apk --release
+
+  app-install:
+    desc: Install the companion APK and grant its permissions without a tap
+    dir: '{{.APP_DIR}}'
+    cmds:
+      - flutter build apk --release
+      - adb install -r build/app/outputs/flutter-apk/app-release.apk
+      - adb shell pm grant com.nktkln.rackphone.companion android.permission.SEND_SMS
+      - adb shell pm grant com.nktkln.rackphone.companion android.permission.RECEIVE_SMS
+      - adb shell pm grant com.nktkln.rackphone.companion android.permission.READ_CALL_LOG
+      - adb shell pm grant com.nktkln.rackphone.companion android.permission.READ_PHONE_STATE
+      - adb shell pm grant com.nktkln.rackphone.companion android.permission.READ_PHONE_NUMBERS
+      - adb shell pm grant com.nktkln.rackphone.companion android.permission.CALL_PHONE
+      # Without these two the system defers the app's alarms by up to a year:
+      # a rack unit is never opened, which is the profile Android treats as
+      # abandoned. Both are settable from the host, so no tap is involved.
+      - adb shell su -c 'dumpsys deviceidle whitelist +com.nktkln.rackphone.companion'
+      - adb shell su -c 'am set-standby-bucket com.nktkln.rackphone.companion active'
+
+  # ======== Build ========
+  build:
+    desc: Build package (wheel + sdist)
+    dir: '{{.CLI_DIR}}'
+    cmds:
+      - uv build
+
+  # ======== Docker ========
+  docker-build:
+    desc: Build Docker image
+    dir: '{{.CLI_DIR}}'
+    cmds:
+      - docker build -t rackphone-bridge .
+
+  docker-run:
+    desc: Run Docker container
+    cmds:
+      - docker run -it --rm -p 9105:9105 rackphone-bridge
+
+  docker:
+    desc: Build and run Docker
+    cmds:
+      - task: docker-build
+      - task: docker-run
