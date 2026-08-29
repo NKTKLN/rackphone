@@ -1,0 +1,147 @@
+{
+  "id": "companion",
+  "name": "Companion",
+  "description": "Sending, the keepalive schedule, and the inbox the host drains - all through the companion APK.",
+  "icon": "message",
+  "settings": [
+    {
+      "key": "collect_sms",
+      "type": "bool",
+      "default": "1",
+      "label": "Collect SMS"
+    },
+    {
+      "key": "collect_calls",
+      "type": "bool",
+      "default": "1",
+      "label": "Collect incoming calls",
+      "help": "Missed and answered. The app sees the phone state rather than the call log, so a rejected call is reported as missed - on an unattended unit the actionable fact is the same."
+    },
+    {
+      "key": "include_body",
+      "type": "bool",
+      "default": "1",
+      "label": "Include message bodies",
+      "help": "Turn off to relay only sender and time. The host then knows a message arrived without the content ever leaving the phone."
+    },
+    {
+      "key": "inbox_cap",
+      "type": "int",
+      "default": "2000",
+      "min": 100,
+      "max": 50000,
+      "label": "Spool cap",
+      "help": "Oldest events are dropped past this. Bounds disk use if the host stops draining; the drop is counted and exported."
+    },
+    {
+      "key": "keepalive_enabled",
+      "type": "bool",
+      "default": "0",
+      "label": "Send a keepalive",
+      "help": "Operators reclaim a SIM that has not been used, and a racked unit only ever receives. Off by default because it spends money on a SIM whose terms only you know."
+    },
+    {
+      "key": "keepalive_to",
+      "type": "string",
+      "default": "self",
+      "label": "Keepalive destination",
+      "depends_on": "keepalive_enabled",
+      "help": "A number, or self to text each SIM's own number. self resolves only if the operator wrote the number onto the SIM; when it did not, the attempt is reported as no_target rather than silently skipped."
+    },
+    {
+      "key": "keepalive_interval_hours",
+      "type": "int",
+      "default": "720",
+      "min": 1,
+      "max": 8760,
+      "label": "Keepalive interval",
+      "unit": "h",
+      "depends_on": "keepalive_enabled",
+      "help": "30 days. Operators that expire an idle SIM give 90 to 180, so this leaves two missed runs of headroom at twelve messages a year. Any successful send counts as activity, so a SIM the host already used sends nothing extra."
+    },
+    {
+      "key": "keepalive_subs",
+      "type": "enum",
+      "default": "all",
+      "values": [
+        "all",
+        "default"
+      ],
+      "label": "Which SIMs to keep alive",
+      "depends_on": "keepalive_enabled",
+      "help": "An operator only sees its own SIM, so on a dual-SIM unit all is the setting that keeps both. default narrows to the subscription Android would send from."
+    },
+    {
+      "key": "keepalive_body",
+      "type": "string",
+      "default": "rackphone keepalive",
+      "label": "Keepalive text",
+      "depends_on": "keepalive_enabled",
+      "help": "Plain ASCII keeps it one GSM-7 part and one charge; a single Cyrillic character would switch the whole message to UCS-2."
+    },
+    {
+      "key": "balance_code",
+      "type": "string",
+      "default": "*102#",
+      "label": "Balance USSD code",
+      "help": "Asked on every SIM on a schedule. Every operator has its own code, and an empty value turns the checks off entirely. Beeline answers *102#."
+    },
+    {
+      "key": "balance_interval_hours",
+      "type": "int",
+      "default": "24",
+      "min": 1,
+      "max": 8760,
+      "label": "Balance check interval",
+      "unit": "h",
+      "depends_on": "balance_code",
+      "help": "Daily. A prepaid SIM does not empty in an hour, and each check is a network round trip on a device whose whole point is to be left alone."
+    }
+  ],
+  "actions": [
+    {
+      "id": "drain",
+      "label": "Drain pending events"
+    },
+    {
+      "id": "peek",
+      "label": "Show pending without consuming"
+    },
+    {
+      "id": "ack",
+      "label": "Confirm the last drain"
+    },
+    {
+      "id": "reset",
+      "label": "Drop everything pending"
+    },
+    {
+      "id": "setup",
+      "label": "Issue the control token"
+    },
+    {
+      "id": "keepalive",
+      "label": "Send the keepalive now"
+    },
+    {
+      "id": "selftest",
+      "label": "Check the app can be reached and can send"
+    },
+    {
+      "id": "balance",
+      "label": "Read the balance on every SIM"
+    }
+  ],
+  "status": [
+    "app",
+    "ready",
+    "pending",
+    "dropped",
+    "collecting",
+    "alarms",
+    "keepalive",
+    "next_due",
+    "sent",
+    "balance"
+  ]
+}

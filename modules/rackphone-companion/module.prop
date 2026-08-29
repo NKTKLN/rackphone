@@ -1,0 +1,6 @@
+id=rackphone-companion
+name=Rackphone Companion
+version=v0.1.0
+versionCode=1
+author=nktkln
+description=Drives the companion APK, which is the only thing on this unit that can send an SMS and the thing that now collects arriving ones. The module holds no telephony logic of its own: it translates Rackphone settings and actions into broadcasts, and reads back what the app wrote.

@@ -1,6 +1,0 @@
-id=rackphone-messaging
-name=Rackphone Messaging
-version=v0.1.0
-versionCode=1
-author=nktkln
-description=Collects incoming SMS, calls and notifications into a spool the host drains over adb. Receive only: it decides nothing and sends nothing, so relay policy, retries and credentials all live on the host.
