@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+# Records what the module broadcast, and answers the way `am` does.
+#
+# The reply line matters as much as the arguments: the module parses the
+# outcome out of `Broadcast completed: result=N, data="..."`, so a stub that
+# printed anything friendlier would test a format the device never produces.
+[ -n "${STUB_AM_LOG:-}" ] && printf '%s\n' "$*" >> "$STUB_AM_LOG"
+printf 'Broadcasting: Intent { act=stub }\n'
+printf 'Broadcast completed: result=%s, data="%s"\n' \
+  "${STUB_AM_RESULT:-0}" "${STUB_AM_DATA:-{\"status\":\"ok\"\}}"

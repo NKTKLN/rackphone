@@ -80,6 +80,25 @@ assert_contains "rejects an unknown plugin" \
 assert_contains "rejects an unknown command" \
   "$(sh "$RP" bogus 2>&1)" "unknown command"
 
+section "Core status"
+CORE_STATUS="$REPO/modules/rackphone-core/rackphone/status.sh"
+assert_eq "counts the plugins under the configured modules directory" \
+  "$(sh "$CORE_STATUS" | sed -n 's/^plugins=//p')" "1"
+
+mkdir -p "$RACKPHONE_MODULES_DIR/rackphone-off/rackphone"
+echo '{"id":"off","name":"Off","settings":[]}' \
+  > "$RACKPHONE_MODULES_DIR/rackphone-off/rackphone/plugin.json"
+touch "$RACKPHONE_MODULES_DIR/rackphone-off/disable"
+# Regression: this once counted every installed module, so core reported a
+# plugin that schema, status and metrics all left out.
+assert_eq "a disabled plugin is not counted" \
+  "$(sh "$CORE_STATUS" | sed -n 's/^plugins=//p')" "1"
+rm -rf "$RACKPHONE_MODULES_DIR/rackphone-off"
+
+assert_eq "reports the config file as present once written" \
+  "$(sh "$CORE_STATUS" | sed -n 's/^config=//p')" "present"
+
+
 section "Schema output"
 SCHEMA=$(sh "$RP" schema)
 assert_matches "schema is JSON with a plugins array" "$SCHEMA" '"plugins":'

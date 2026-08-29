@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+# Only `pm path <pkg>` is used, to answer "is the app installed".
+case "${1:-}" in
+  path) [ "${STUB_APP_INSTALLED:-1}" = "1" ] && { echo "package:/data/app/base.apk"; exit 0; }; exit 1 ;;
+  *) exit 0 ;;
+esac
