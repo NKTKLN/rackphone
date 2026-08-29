@@ -1,0 +1,113 @@
+# ========================
+# Documentation and config files
+# ========================
+.gitignore
+LICENSE.md
+
+# ========================
+# Directories not needed in the image
+# ========================
+utils/
+notebooks/
+data/
+
+# ========================
+# Python bytecode and caches
+# ========================
+__pycache__/
+*.pyс
+*.pyo
+*.pyd
+*.so
+
+# ========================
+# Virtual environments
+# ========================
+.venv/
+venv/
+env/
+
+# ========================
+# Build artifacts and packages
+# ========================
+build/
+dist/
+*.egg-info/
+*.whl
+
+# ========================
+# IDEs and editors
+# ========================
+.idea/
+.vscode/
+*.sublime-project
+*.sublime-workspace
+
+# ========================
+# Logs and temporary files
+# ========================
+*.log
+tmp/
+tmp.*
+
+# ========================
+# Jupyter notebooks and artifacts
+# ========================
+.ipynb_checkpoints/
+test.ipynb
+*.nbconvert.ipynb
+
+# ========================
+# Testing and coverage
+# ========================
+.coverage
+coverage.xml
+.cache/
+.hypothesis/
+
+# ========================
+# Type checkers and linters
+# ========================
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+
+# ========================
+# Training / ML outputs
+# ========================
+checkpoints/
+output/
+model/
+runs/
+
+# ========================
+# nbQA cache
+# ========================
+__nbqa_cache__/
+
+# ========================
+# Exceptions (keep files)
+# ========================
+!data/raw/*.json
+!example*.*
+
+# ========================
+# System files
+# ========================
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ========================
+# Docker-related files
+# ========================
+docker-compose.override.yml
+docker-compose.local.yml
+
+
+# ========================
+# Rackphone-specific
+# ========================
+tests/
+Taskfile.yml
+.pre-commit-config.yaml
