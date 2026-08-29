@@ -1,0 +1,28 @@
+name: rackphone_companion
+description: >
+  The part of a Rackphone unit that is allowed to send: an APK holding SEND_SMS,
+  driven by broadcasts from the Magisk plugin, with a keepalive schedule of its
+  own so an idle SIM is never reclaimed.
+publish_to: 'none'
+
+# Matches the module versions in modules/*/module.prop.
+version: 0.1.0+1
+
+environment:
+  sdk: ^3.12.2
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^6.0.0
+
+# No third-party packages, and that is a decision rather than an accident. The
+# only capability this app needs - SmsManager - is a dozen lines of Kotlin, and
+# a package that wraps it would put a dependency it does not control between a
+# rack unit and the one thing it exists to do.
+flutter:
+  uses-material-design: true

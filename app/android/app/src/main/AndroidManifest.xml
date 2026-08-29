@@ -1,0 +1,118 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <!-- The whole point of this APK: a supported path to SmsManager. Nothing in
+         a root shell can send an SMS, so the sending lives in an app that holds
+         the permission and is driven by broadcasts from the Magisk plugin. -->
+    <uses-permission android:name="android.permission.SEND_SMS"/>
+    <!-- Optional. Grants the SIM list and, on some carriers, the unit's own
+         number, which is what makes `keepalive_to=self` resolvable. Everything
+         works without it except that one convenience. -->
+    <uses-permission android:name="android.permission.READ_PHONE_STATE"/>
+    <uses-permission android:name="android.permission.READ_PHONE_NUMBERS"/>
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED"/>
+    <!-- USSD. sendUssdRequest is the only supported way to ask the network a
+         question - balance, tariff - and it is gated on CALL_PHONE. -->
+    <uses-permission android:name="android.permission.CALL_PHONE"/>
+
+    <!-- Receiving. RECEIVE_SMS is enough to be handed every arriving message;
+         being the default SMS app would additionally mean owning the inbox,
+         which this unit has no reason to do. READ_CALL_LOG is what makes the
+         caller's number visible on a PHONE_STATE broadcast since Android 9. -->
+    <uses-permission android:name="android.permission.RECEIVE_SMS"/>
+    <uses-permission android:name="android.permission.READ_CALL_LOG"/>
+
+    <application
+        android:label="@string/app_name"
+        android:name="${applicationName}"
+        android:allowBackup="false"
+        android:icon="@mipmap/ic_launcher">
+        <activity
+            android:name=".MainActivity"
+            android:exported="true"
+            android:launchMode="singleTop"
+            android:taskAffinity=""
+            android:theme="@style/LaunchTheme"
+            android:configChanges="orientation|keyboardHidden|keyboard|screenSize|smallestScreenSize|locale|layoutDirection|fontScale|screenLayout|density|uiMode"
+            android:hardwareAccelerated="true"
+            android:windowSoftInputMode="adjustResize">
+            <meta-data
+              android:name="io.flutter.embedding.android.NormalTheme"
+              android:resource="@style/NormalTheme"
+              />
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN"/>
+                <category android:name="android.intent.category.LAUNCHER"/>
+            </intent-filter>
+        </activity>
+
+        <!-- The control surface. Exported because the caller is a root shell,
+             which is a different uid and cannot reach a private receiver; every
+             command is therefore authenticated by the shared token in
+             files/rackphone/token, which only root can read. -->
+        <receiver
+            android:name=".CommandReceiver"
+            android:exported="true"
+            android:directBootAware="false">
+            <intent-filter>
+                <action android:name="com.nktkln.rackphone.companion.SEND"/>
+                <action android:name="com.nktkln.rackphone.companion.CONFIG"/>
+                <action android:name="com.nktkln.rackphone.companion.KEEPALIVE"/>
+                <action android:name="com.nktkln.rackphone.companion.STATUS"/>
+                <action android:name="com.nktkln.rackphone.companion.SETUP"/>
+                <action android:name="com.nktkln.rackphone.companion.DRAIN"/>
+                <action android:name="com.nktkln.rackphone.companion.ACK"/>
+                <action android:name="com.nktkln.rackphone.companion.PEEK"/>
+                <action android:name="com.nktkln.rackphone.companion.RESET"/>
+                <action android:name="com.nktkln.rackphone.companion.USSD"/>
+                <action android:name="com.nktkln.rackphone.companion.BALANCE"/>
+            </intent-filter>
+        </receiver>
+
+        <!-- Incoming SMS. Restricted to BROADCAST_SMS, which only the system
+             holds, so nothing installed on the device can fabricate one. -->
+        <receiver
+            android:name=".SmsReceiver"
+            android:exported="true"
+            android:permission="android.permission.BROADCAST_SMS">
+            <intent-filter android:priority="800">
+                <action android:name="android.provider.Telephony.SMS_RECEIVED"/>
+            </intent-filter>
+        </receiver>
+
+        <!-- Ringing, off-hook and idle: a missed call is the shape they make. -->
+        <receiver android:name=".CallReceiver" android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.PHONE_STATE"/>
+            </intent-filter>
+        </receiver>
+
+        <!-- Delivery outcomes from the radio. Explicit-component PendingIntents,
+             so nothing needs to be exported. -->
+        <receiver android:name=".SendResultReceiver" android:exported="false"/>
+        <receiver android:name=".KeepaliveReceiver" android:exported="false"/>
+        <receiver android:name=".BalanceReceiver" android:exported="false"/>
+
+        <!-- An alarm does not survive a reboot, and this unit reboots after
+             every module update. -->
+        <receiver
+            android:name=".BootReceiver"
+            android:exported="true"
+            android:enabled="true">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED"/>
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED"/>
+            </intent-filter>
+        </receiver>
+
+        <meta-data
+            android:name="flutterEmbedding"
+            android:value="2" />
+    </application>
+
+    <queries>
+        <intent>
+            <action android:name="android.intent.action.PROCESS_TEXT"/>
+            <data android:mimeType="text/plain"/>
+        </intent>
+    </queries>
+</manifest>
