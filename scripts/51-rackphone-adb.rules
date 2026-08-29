@@ -1,0 +1,14 @@
+# USB access for the adb server, and two settings a racked phone needs.
+#
+# Install to /etc/udev/rules.d/51-rackphone-adb.rules. Find the vendor id of a
+# phone that is not listed here with `lsusb` while it is plugged in.
+
+# Xiaomi (Redmi, POCO, Mi - includes the 11 Lite 5G NE this project runs on).
+SUBSYSTEM=="usb", ATTR{idVendor}=="2717", MODE="0660", GROUP="adb"
+# Google, and the id most devices enumerate with in fastboot and recovery.
+SUBSYSTEM=="usb", ATTR{idVendor}=="18d1", MODE="0660", GROUP="adb"
+
+# USB autosuspend drops a phone that has sat idle in a rack for hours, and it
+# comes back as a fresh device - which loses the adb transport mid-scrape.
+ACTION=="add", SUBSYSTEM=="usb", ATTR{idVendor}=="2717", TEST=="power/control", ATTR{power/control}="on"
+ACTION=="add", SUBSYSTEM=="usb", ATTR{idVendor}=="18d1", TEST=="power/control", ATTR{power/control}="on"

@@ -1,0 +1,59 @@
+# ADB server for containers.
+#
+# The phones hang off this machine's USB, and the bridge runs in Docker - so the
+# adb server has to be reachable from a container. It listens on localhost and
+# nothing else, because an adb server is unauthenticated: anyone who can open
+# that port owns every phone attached to this host.
+#
+# Localhost is also the only choice adb actually offers. The server accepts
+# `tcp:<port>` (every interface, via -a) or `tcp:localhost:<port>`, and refuses
+# anything else outright:
+#
+#   could not install *smartsocket* listener:
+#   listening on specified hostname currently unsupported
+#
+# Which is why the container reaches it through the host network namespace or a
+# socket proxy rather than through a bridge address. See docs/adb-server.md.
+
+[Unit]
+Description=ADB server for Rackphone units
+Documentation=https://github.com/NKTKLN/rackphone/blob/main/docs/adb-server.md
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=adb
+Group=adb
+
+# The RSA key the phone authorises lives in HOME. It has to survive restarts and
+# reboots, or every restart raises an "Allow USB debugging?" dialog on a unit
+# that has nobody to tap it. StateDirectory creates and owns /var/lib/rackphone-adb.
+StateDirectory=rackphone-adb
+Environment=HOME=%S/rackphone-adb
+ExecStartPre=-/usr/bin/adb kill-server
+ExecStart=/usr/bin/adb -L tcp:localhost:5037 nodaemon server
+Restart=always
+RestartSec=2
+
+# Hardening. PrivateDevices is deliberately absent: it hides /dev/bus/usb, and
+# the server would then see no phones at all - the one setting that looks
+# obviously right here and breaks everything.
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictNamespaces=yes
+RestrictSUIDSGID=yes
+RestrictRealtime=yes
+LockPersonality=yes
+SystemCallArchitectures=native
+# AF_NETLINK is needed: libusb learns about a phone being plugged in from a
+# netlink socket, so without it hotplug stops working after the first scan.
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
+
+[Install]
+WantedBy=multi-user.target

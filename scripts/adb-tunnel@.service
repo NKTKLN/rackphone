@@ -1,0 +1,47 @@
+# SSH tunnel to an adb server on another machine.
+#
+# For the case where the containers and the phones are not on the same host:
+# the adb server stays bound to localhost where the phones are, and this brings
+# that socket to localhost here. Instance name is an ssh destination or a
+# Host alias from ~/.ssh/config - `systemctl enable --now adb-tunnel@phones-host`.
+#
+# The key this uses should be able to do nothing else. On the phone host:
+#
+#   restrict,port-forwarding,permitopen="127.0.0.1:5037" ssh-ed25519 AAAA...
+#
+# Install: see docs/adb-server.md.
+
+[Unit]
+Description=SSH tunnel to the adb server on %i
+Documentation=https://github.com/NKTKLN/rackphone/blob/main/docs/adb-server.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=adb
+Group=adb
+StateDirectory=rackphone-adb
+Environment=HOME=%S/rackphone-adb
+
+# ExitOnForwardFailure matters more than it looks: without it ssh connects,
+# fails to bind the port because something else holds it, and sits there
+# looking healthy while nothing works.
+ExecStart=/usr/bin/ssh -N -T \
+    -o BatchMode=yes \
+    -o ExitOnForwardFailure=yes \
+    -o ServerAliveInterval=15 \
+    -o ServerAliveCountMax=3 \
+    -L 127.0.0.1:5037:127.0.0.1:5037 \
+    %i
+
+Restart=always
+RestartSec=5
+
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+
+[Install]
+WantedBy=multi-user.target

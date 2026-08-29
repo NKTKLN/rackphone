@@ -1,0 +1,21 @@
+# Bridge-side entrance to the adb server.
+#
+# adb itself can only listen on localhost, so this is what a container on a
+# Docker bridge network connects to. systemd accepts the connection here and
+# hands it to the proxy, which forwards it to the private adb socket.
+#
+# Install: see docs/adb-server.md.
+
+[Unit]
+Description=ADB server socket for containers
+Documentation=https://github.com/NKTKLN/rackphone/blob/main/docs/adb-server.md
+
+[Socket]
+ListenStream=172.17.0.1:5037
+# docker0 has no carrier until a container attaches to it, and a socket unit
+# that insisted on a live interface would fail at every boot before the first
+# container starts. FreeBind lets it claim the address regardless.
+FreeBind=true
+
+[Install]
+WantedBy=sockets.target

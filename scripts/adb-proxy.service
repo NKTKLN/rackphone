@@ -1,0 +1,26 @@
+# Forwards one accepted connection to the adb server on localhost.
+#
+# Started by adb-proxy.socket, never enabled on its own. The point of the
+# indirection is that the adb server stays bound to localhost, where nothing
+# outside this host can reach it.
+
+[Unit]
+Description=ADB socket proxy for containers
+Documentation=https://github.com/NKTKLN/rackphone/blob/main/docs/adb-server.md
+Requires=adb-proxy.socket
+After=adb-proxy.socket
+Requires=adb-server.service
+After=adb-server.service
+
+[Service]
+# Debian and Ubuntu ship it as /lib/systemd/systemd-socket-proxyd, which is a
+# symlink to this path on any distribution with a merged /usr.
+ExecStart=/usr/lib/systemd/systemd-socket-proxyd 127.0.0.1:5037
+# It needs no identity of its own: an inherited socket in, a loopback
+# connection out.
+DynamicUser=yes
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
