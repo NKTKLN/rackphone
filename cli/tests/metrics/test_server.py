@@ -28,7 +28,7 @@ HTTP_SERVER_ERROR = 500
 @contextmanager
 def serve_in_background() -> Iterator[str]:
     """Serve every configured unit on a throwaway port."""
-    handler = partial(MetricsRequestHandler, target_units=units.load_all_units())
+    handler = partial(MetricsRequestHandler, target_units=units.load_all_units)
     server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
     threading.Thread(target=server.serve_forever, daemon=True).start()
     try:
@@ -82,9 +82,33 @@ class TestEndpoint:
 
 
 @pytest.mark.usefixtures("repo")
-def test_serving_without_a_unit_says_what_to_run_first() -> None:
-    with pytest.raises(SystemExit, match="adopt"):
-        metrics_server.serve_metrics("127.0.0.1", 0, None)
+def test_serving_without_a_unit_starts_anyway(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Exiting here would put a container in a restart loop that cannot be
+    # broken from outside: adopting a unit means getting into the very
+    # container that keeps dying.
+    said: list[str] = []
+
+    def do_not_serve(_self: object, *_args: object, **_kwargs: object) -> None:
+        """Return at once instead of blocking the test in the accept loop."""
+
+    monkeypatch.setattr(
+        metrics_server.ThreadingHTTPServer, "serve_forever", do_not_serve
+    )
+    monkeypatch.setattr(metrics_server.render, "warn", said.append)
+    metrics_server.serve_metrics("127.0.0.1", 0, None)
+    assert any("adopt" in line for line in said)
+
+
+@pytest.mark.usefixtures("repo")
+def test_a_unit_adopted_while_serving_is_picked_up() -> None:
+    # The scrape re-reads the unit list, so filling the volume of a running
+    # container is enough - no restart, and no chicken-and-egg.
+    with serve_in_background() as base_url:
+        assert "lisa07" not in httpx.get(f"{base_url}/metrics").text
+        units.create_unit("lisa07", "AAA")
+        assert "lisa07" in httpx.get(f"{base_url}/metrics").text
 
 
 @pytest.mark.usefixtures("repo")
