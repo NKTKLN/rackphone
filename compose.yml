@@ -24,7 +24,6 @@
 #   RACKPHONE_NTFY_USER=rackphone
 #   RACKPHONE_NTFY_PASSWORD=...
 #   RACKPHONE_API_TOKEN=...
-#   GRAFANA_PASSWORD=...
 #
 # The adb server owns the USB handle and listens on the daemon host's loopback,
 # where no container can reach it. docs/adb-server.md sets up the socket proxy
@@ -92,11 +91,11 @@ services:
   # header. Their configuration lives in named volumes, filled once:
   #
   #   docker compose cp monitoring/prometheus.yml prometheus:/etc/prometheus/
-  #   docker compose cp monitoring/grafana/provisioning/. grafana:/etc/grafana/provisioning/
-  #   docker compose cp monitoring/grafana/dashboards/. grafana:/var/lib/grafana/dashboards/
-  #   docker compose --profile monitoring restart
+  #   docker compose restart prometheus
   #
-  # Repeat the relevant line after editing a dashboard or the scrape config.
+  # Repeat after editing the scrape config. Grafana is deliberately not here:
+  # it is one instance watching several things, and it belongs wherever the
+  # rest of them are watched from.
   prometheus:
     profiles: ["monitoring"]
     image: prom/prometheus:latest
@@ -108,32 +107,13 @@ services:
     ports:
       - "9090:9090"
 
-  grafana:
-    profiles: ["monitoring"]
-    image: grafana/grafana:latest
-    container_name: rackphone-grafana
-    restart: unless-stopped
-    depends_on:
-      - prometheus
-    environment:
-      # The provisioned datasource reads this, so nothing in the tracked YAML
-      # needs editing to point at the Prometheus beside it.
-      RACKPHONE_PROMETHEUS_URL: http://prometheus:9090
-      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_PASSWORD:-admin}
-    volumes:
-      - grafana:/var/lib/grafana
-      - grafana-provisioning:/etc/grafana/provisioning
-    ports:
-      - "3000:3000"
 
 volumes:
   # Unit files: which phones exist and what was declared for them.
   repo:
   # The event store the gateway writes; the only stateful thing here.
   state:
-  # Prometheus and Grafana keep both their data and their configuration in
-  # volumes, because a remote daemon cannot read the files in this repository.
+  # Prometheus keeps both its data and its configuration in volumes, because a
+  # remote daemon cannot read the files in this repository.
   prometheus:
   prometheus-config:
-  grafana:
-  grafana-provisioning:

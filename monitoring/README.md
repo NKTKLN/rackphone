@@ -1,7 +1,8 @@
 # Monitoring
 
-Prometheus and Grafana both run in the compose stack, under the `monitoring`
-profile. The files here are what they are configured with.
+Prometheus runs in the compose stack under the `monitoring` profile;
+**Grafana runs outside it**, because one Grafana usually watches more than this
+rack. The files here are what both are configured with.
 
 > [!IMPORTANT]
 > **Nothing here is mounted.** The stack is driven through a remote Docker
@@ -11,9 +12,7 @@ profile. The files here are what they are configured with.
 >
 > ```sh
 > docker compose cp prometheus.yml prometheus:/etc/prometheus/
-> docker compose cp grafana/provisioning/. grafana:/etc/grafana/provisioning/
-> docker compose cp grafana/dashboards/. grafana:/var/lib/grafana/dashboards/
-> docker compose --profile monitoring restart
+> docker compose restart prometheus
 > ```
 
 
@@ -29,10 +28,10 @@ profile. The files here are what they are configured with.
 
 ## Pointing an external Grafana at this
 
-Copy the same two directories into a Grafana that lives elsewhere and set the
-Prometheus URL. Nothing here needs editing — the datasource reads
-`RACKPHONE_PROMETHEUS_URL`, which the compose service already sets to the
-Prometheus beside it.
+Mount `grafana/provisioning/` and `grafana/dashboards/` into your Grafana and
+set the Prometheus URL. Nothing here needs editing — the datasource reads
+`RACKPHONE_PROMETHEUS_URL`, and defaults to loopback for a Grafana running
+natively on the same host as the stack.
 
 ```sh
 docker run -d --name grafana \
