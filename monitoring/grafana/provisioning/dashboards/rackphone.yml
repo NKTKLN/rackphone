@@ -1,0 +1,15 @@
+apiVersion: 1
+
+providers:
+  - name: rackphone
+    orgId: 1
+    folder: Rackphone
+    type: file
+    disableDeletion: false
+    # The dashboard is a file in the repo, so edits made in the Grafana UI are
+    # overwritten on reload. Export and commit the JSON rather than editing live.
+    allowUiUpdates: false
+    updateIntervalSeconds: 30
+    options:
+      path: /var/lib/grafana/dashboards
+      foldersFromFilesStructure: false

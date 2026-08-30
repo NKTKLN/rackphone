@@ -1,0 +1,25 @@
+# Prometheus config for the Rackphone stack.
+#
+# One target covers every unit: the bridge attaches a `unit` label to each
+# sample, because a single process serves several phones and Prometheus' own
+# `instance` label cannot distinguish them.
+global:
+  scrape_interval: 15s
+  scrape_timeout: 10s
+  external_labels:
+    monitor: rackphone
+
+scrape_configs:
+  - job_name: rackphone
+    # The bridge talks to the phone over USB, so a scrape can block on a slow
+    # dumpsys. 10s of timeout against a 0.44s typical scrape leaves plenty of
+    # headroom without letting a wedged unit stall the whole job.
+    static_configs:
+      # The bridge is a service on the same compose network, so it is reachable
+      # by name. Point this at host.docker.internal:9105 instead when Prometheus
+      # runs outside the stack.
+      - targets: ["bridge:9105"]
+
+  - job_name: prometheus
+    static_configs:
+      - targets: ["localhost:9090"]

@@ -1,0 +1,24 @@
+apiVersion: 1
+
+# For a Grafana that lives outside the compose stack.
+#
+# The URL was `http://prometheus:9090`, which only resolved from inside the
+# stack's own network. An external Grafana cannot see that name at all, so this
+# defaults to loopback and is overridable for anything further away:
+#
+#   same host, Grafana native      http://127.0.0.1:9090   (this default)
+#   same host, Grafana in a container
+#                                  http://host.docker.internal:9090
+#   another machine                http://<prometheus-host>:9090
+#
+# Grafana interpolates $VARS in provisioning files from its own environment,
+# so setting RACKPHONE_PROMETHEUS_URL is enough - no edit required.
+datasources:
+  - name: Prometheus
+    type: prometheus
+    access: proxy
+    url: ${RACKPHONE_PROMETHEUS_URL:-http://127.0.0.1:9090}
+    isDefault: true
+    uid: rackphone-prom
+    jsonData:
+      timeInterval: 15s
