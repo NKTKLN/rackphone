@@ -1,0 +1,102 @@
+# Alerting rules for Rackphone units.
+#
+# Drop into a Prometheus that already has a rules directory:
+#
+#   /etc/prometheus/rules/rackphone.yml
+#
+# The `unit` label is attached by the bridge, so every alert below names the
+# phone it is about without any per-phone target configuration.
+groups:
+  - name: rackphone
+    rules:
+      # A unit that stopped answering. Everything else here is silent while
+      # this fires, so it comes first.
+      - alert: RackphoneUnitDown
+        expr: rackphone_up == 0
+        for: 10m
+        labels:
+          severity: critical
+        annotations:
+          summary: "{{ $labels.unit }} is not answering scrapes"
+          description: "The bridge reached adb but the unit did not respond."
+
+      - alert: RackphoneCompanionDown
+        expr: rackphone_companion_up == 0
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.unit }}: companion app unreachable"
+          description: >-
+            The app is missing, unpermitted, or has no SIM. The unit can still
+            report metrics; it cannot send or receive.
+
+      # Android defers an unopened app's alarms by up to a year. Nothing else
+      # about the unit looks wrong while this is true.
+      - alert: RackphoneAlarmsDeferred
+        expr: rackphone_companion_battery_exempt == 0
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.unit }}: keepalive alarm will not run on time"
+          description: >-
+            Battery optimisation is on for the companion app. Fix with
+            `adb shell su -c 'dumpsys deviceidle whitelist +com.nktkln.rackphone.companion'`.
+
+      # An SMS costs a few roubles, so a SIM below that cannot keep itself
+      # alive - which is the one thing it is there to do.
+      - alert: RackphoneBalanceLow
+        expr: rackphone_companion_balance < 100
+        for: 30m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.unit }} SIM {{ $labels.sub_id }}: {{ $value }} left"
+
+      - alert: RackphoneBalanceCritical
+        expr: rackphone_companion_balance < 30
+        for: 30m
+        labels:
+          severity: critical
+        annotations:
+          summary: "{{ $labels.unit }} SIM {{ $labels.sub_id }}: {{ $value }} left"
+          description: "Below the cost of the keepalive message itself."
+
+      # Without this the two above go quiet exactly when the SIM stops
+      # answering: a balance that is no longer refreshed is not a balance.
+      - alert: RackphoneBalanceStale
+        expr: rackphone_companion_balance_age_seconds > 3 * 24 * 3600
+        for: 1h
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.unit }} SIM {{ $labels.sub_id }}: balance not read for 3 days"
+
+      # A SIM whose own number is not on the card cannot text itself, and every
+      # other signal about it stays green.
+      - alert: RackphoneKeepaliveTargetUnresolved
+        expr: rackphone_companion_keepalive_targets{resolves="false"} > 0
+        for: 1h
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.unit }}: a keepalive target resolves to nothing"
+
+      # The host stopped draining. The spool is capped, so this becomes data
+      # loss if left.
+      - alert: RackphoneSpoolNotDrained
+        expr: rackphone_companion_events_pending > 100
+        for: 30m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.unit }}: {{ $value }} events waiting for the gateway"
+
+      - alert: RackphoneEventsDropped
+        expr: increase(rackphone_companion_events_dropped_total[1h]) > 0
+        labels:
+          severity: critical
+        annotations:
+          summary: "{{ $labels.unit }}: messages dropped at the spool cap"
+          description: "These existed and no longer do."

@@ -24,7 +24,28 @@ configured with; the only thing they need from the stack is the bridge on
 | `grafana/provisioning/datasources/` | Datasource definition |
 | `grafana/provisioning/dashboards/` | Dashboard provider |
 | `grafana/dashboards/*.json` | The four dashboards |
+| `rules/rackphone.yml` | Alerting rules, for a Prometheus that has an Alertmanager |
 | `generate-dashboards.py` | Regenerates those JSON files |
+
+## Scraping from a Prometheus you already run
+
+One job covers every phone: the `unit` label comes from the bridge, so adding a
+second phone changes nothing here.
+
+```yaml
+  - job_name: rackphone
+    # A scrape is a USB round-trip to the phone. Typical is under a second, and
+    # the wider window is so that one wedged unit cannot fail the job.
+    scrape_interval: 30s
+    scrape_timeout: 20s
+    static_configs:
+      - targets: ["<host running the bridge>:9105"]
+```
+
+The rules in `rules/` assume that job. Copy the file into the rules directory
+that Prometheus already loads — every alert names the unit it is about, and
+`RackphoneBalanceStale` is what keeps the two balance alerts honest when a SIM
+stops answering altogether.
 
 ## Pointing an external Grafana at this
 
