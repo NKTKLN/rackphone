@@ -1,17 +1,20 @@
 # Monitoring
 
-Prometheus runs in the compose stack under the `monitoring` profile;
-**Grafana runs outside it**. The files here are what an external Grafana
-consumes.
+Prometheus and Grafana both run in the compose stack, under the `monitoring`
+profile. The files here are what they are configured with.
 
-The scrape config is **baked into the Prometheus image** rather than mounted:
-this stack is driven through a remote Docker context, where a bind mount is
-resolved on the daemon's filesystem and would find nothing. Rebuild after
-editing `prometheus.yml`:
-
-```sh
-docker compose --profile monitoring up -d --build prometheus
-```
+> [!IMPORTANT]
+> **Nothing here is mounted.** The stack is driven through a remote Docker
+> context, where a bind mount is resolved on the daemon's filesystem and finds
+> nothing of yours. Both services keep their configuration in named volumes,
+> which are filled once and refilled after an edit:
+>
+> ```sh
+> docker compose cp prometheus.yml prometheus:/etc/prometheus/
+> docker compose cp grafana/provisioning/. grafana:/etc/grafana/provisioning/
+> docker compose cp grafana/dashboards/. grafana:/var/lib/grafana/dashboards/
+> docker compose --profile monitoring restart
+> ```
 
 
 ## Layout
@@ -26,8 +29,10 @@ docker compose --profile monitoring up -d --build prometheus
 
 ## Pointing an external Grafana at this
 
-Mount both directories into your Grafana and set the Prometheus URL. Nothing
-here needs editing — the datasource reads `RACKPHONE_PROMETHEUS_URL`.
+Copy the same two directories into a Grafana that lives elsewhere and set the
+Prometheus URL. Nothing here needs editing — the datasource reads
+`RACKPHONE_PROMETHEUS_URL`, which the compose service already sets to the
+Prometheus beside it.
 
 ```sh
 docker run -d --name grafana \
