@@ -1,18 +1,18 @@
 # Monitoring
 
-Prometheus runs in the compose stack under the `monitoring` profile;
-**Grafana runs outside it**, because one Grafana usually watches more than this
-rack. The files here are what both are configured with.
+**Prometheus and Grafana both run outside the Rackphone stack**, because each
+usually watches more than this rack. The files here are what they are
+configured with; the only thing they need from the stack is the bridge on
+`:9105`.
 
 > [!IMPORTANT]
-> **Nothing here is mounted.** The stack is driven through a remote Docker
-> context, where a bind mount is resolved on the daemon's filesystem and finds
-> nothing of yours. Both services keep their configuration in named volumes,
-> which are filled once and refilled after an edit:
+> If your Prometheus or Grafana runs against a **remote** Docker daemon, these
+> files cannot be bind-mounted into it: the daemon resolves the path on its own
+> filesystem. Copy them into the container instead, and repeat after an edit:
 >
 > ```sh
-> docker compose cp prometheus.yml prometheus:/etc/prometheus/
-> docker compose restart prometheus
+> docker cp prometheus.yml <container>:/etc/prometheus/
+> docker restart <container>
 > ```
 
 

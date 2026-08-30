@@ -25,6 +25,10 @@
 #   RACKPHONE_NTFY_PASSWORD=...
 #   RACKPHONE_API_TOKEN=...
 #
+# Prometheus and Grafana are not here on purpose: both usually watch more than
+# one rack, and neither needs to live beside the thing it scrapes. Point them at
+# the bridge below - monitoring/ has the scrape config and the dashboards.
+#
 # The adb server owns the USB handle and listens on the daemon host's loopback,
 # where no container can reach it. docs/adb-server.md sets up the socket proxy
 # that puts it on the bridge address these services resolve through
@@ -85,35 +89,9 @@ services:
       start_period: 20s
       retries: 3
 
-  # Opt-in: docker compose --profile monitoring up -d
-  #
-  # Neither of these can mount a config file from your working copy - see the
-  # header. Their configuration lives in named volumes, filled once:
-  #
-  #   docker compose cp monitoring/prometheus.yml prometheus:/etc/prometheus/
-  #   docker compose restart prometheus
-  #
-  # Repeat after editing the scrape config. Grafana is deliberately not here:
-  # it is one instance watching several things, and it belongs wherever the
-  # rest of them are watched from.
-  prometheus:
-    profiles: ["monitoring"]
-    image: prom/prometheus:latest
-    container_name: rackphone-prometheus
-    restart: unless-stopped
-    volumes:
-      - prometheus-config:/etc/prometheus
-      - prometheus:/prometheus
-    ports:
-      - "9090:9090"
-
-
 volumes:
   # Unit files: which phones exist and what was declared for them.
   repo:
   # The event store the gateway writes; the only stateful thing here.
   state:
-  # Prometheus keeps both its data and its configuration in volumes, because a
-  # remote daemon cannot read the files in this repository.
-  prometheus:
-  prometheus-config:
+

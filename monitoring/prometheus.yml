@@ -15,10 +15,10 @@ scrape_configs:
     # dumpsys. 10s of timeout against a 0.44s typical scrape leaves plenty of
     # headroom without letting a wedged unit stall the whole job.
     static_configs:
-      # The bridge is a service on the same compose network, so it is reachable
-      # by name. Point this at host.docker.internal:9105 instead when Prometheus
-      # runs outside the stack.
-      - targets: ["bridge:9105"]
+      # Prometheus runs outside the Rackphone stack, so it reaches the bridge
+      # through the host rather than by service name. Use the host's address
+      # directly when Prometheus is not in a container.
+      - targets: ["host.docker.internal:9105"]
 
   - job_name: prometheus
     static_configs:
