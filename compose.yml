@@ -1,0 +1,110 @@
+# Rackphone containers.
+#
+# Written for a remote Docker context. Every path in a bind mount is resolved
+# by the daemon rather than by the machine running the command, so a
+# `./units:/repo/units` here would silently mount an empty directory that
+# happens to exist on the other host - or fail. This file therefore uses named
+# volumes and environment variables exclusively, and reads nothing from your
+# working copy at run time.
+#
+# Which means the data has to be put into the volumes once:
+#
+#   docker compose cp ./units/. gateway:/repo/units/
+#
+# or, equivalently, by adopting the phone from inside the container:
+#
+#   docker compose exec gateway rackphone adopt lisa01
+#
+# Credentials come from a local .env, which Compose reads on this side and
+# passes as environment - the one kind of configuration that crosses a remote
+# context intact:
+#
+#   RACKPHONE_NTFY_URL=https://ntfy.example.com
+#   RACKPHONE_NTFY_TOPIC=rackphone
+#   RACKPHONE_NTFY_USER=rackphone
+#   RACKPHONE_NTFY_PASSWORD=...
+#   RACKPHONE_API_TOKEN=...
+#
+# The adb server owns the USB handle and listens on the daemon host's loopback,
+# where no container can reach it. docs/adb-server.md sets up the socket proxy
+# that puts it on the bridge address these services resolve through
+# host-gateway.
+
+name: rackphone
+
+x-rackphone: &rackphone
+  build:
+    context: ./cli
+  image: rackphone:0.1.0
+  restart: unless-stopped
+  extra_hosts:
+    - "host.docker.internal:host-gateway"
+
+services:
+  # Prometheus bridge: one scrape, one USB round-trip per unit.
+  bridge:
+    <<: *rackphone
+    container_name: rackphone-bridge
+    command: ["serve", "--host", "0.0.0.0", "--port", "9105"]
+    environment:
+      ADB_SERVER_SOCKET: tcp:host.docker.internal:5037
+      RACKPHONE_REPO: /repo
+    volumes:
+      - repo:/repo
+    ports:
+      - "9105:9105"
+
+  # SMS and call relay: drains the companion plugin, stores, forwards to ntfy,
+  # and serves the API.
+  gateway:
+    <<: *rackphone
+    container_name: rackphone-gateway
+    command: ["gateway", "--host", "0.0.0.0", "--port", "9106"]
+    environment:
+      ADB_SERVER_SOCKET: tcp:host.docker.internal:5037
+      RACKPHONE_REPO: /repo
+      # Absent values are a supported state: the gateway then stores events and
+      # serves them without pushing anywhere.
+      RACKPHONE_NTFY_URL: ${RACKPHONE_NTFY_URL:-}
+      RACKPHONE_NTFY_TOPIC: ${RACKPHONE_NTFY_TOPIC:-}
+      RACKPHONE_NTFY_USER: ${RACKPHONE_NTFY_USER:-}
+      RACKPHONE_NTFY_PASSWORD: ${RACKPHONE_NTFY_PASSWORD:-}
+      RACKPHONE_NTFY_TOKEN: ${RACKPHONE_NTFY_TOKEN:-}
+      RACKPHONE_API_TOKEN: ${RACKPHONE_API_TOKEN:-}
+    volumes:
+      - repo:/repo
+      - state:/state
+    # Loopback on purpose: the API serves message bodies, and the token above
+    # is what has to be set before this is widened.
+    ports:
+      - "127.0.0.1:9106:9106"
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "http://localhost:9106/health"]
+      interval: 30s
+      timeout: 10s
+      start_period: 20s
+      retries: 3
+
+  # Opt-in: docker compose --profile monitoring up -d
+  #
+  # The scrape config is baked into the image rather than mounted, for the same
+  # reason as everything else here - a remote daemon cannot see your files.
+  # Rebuild after editing monitoring/prometheus.yml.
+  prometheus:
+    profiles: ["monitoring"]
+    build:
+      context: ./monitoring
+    image: rackphone-prometheus:0.1.0
+    container_name: rackphone-prometheus
+    restart: unless-stopped
+    volumes:
+      - prometheus:/prometheus
+    ports:
+      - "9090:9090"
+
+volumes:
+  # Unit files: which phones exist and what was declared for them.
+  repo:
+  # The event store the gateway writes; the only stateful thing here.
+  state:
+  prometheus:

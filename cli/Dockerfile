@@ -40,7 +40,8 @@ FROM python:3.13-slim AS final
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PATH="/opt/venv/bin:$PATH" \
-    RACKPHONE_REPO=/repo
+    RACKPHONE_REPO=/repo \
+    XDG_STATE_HOME=/state
 
 # Runtime-only deps: adb speaks to the server that owns the USB handle
 RUN apt-get update && apt-get install --no-install-recommends -y \
@@ -60,6 +61,12 @@ COPY --from=builder /app /app
 
 # Fix ownership so non-root user can read/run everything
 RUN chown -R rackphone:rackphone /app /opt/venv
+
+# The two directories a named volume gets mounted over. Creating them here with
+# the right owner is what makes Docker seed a fresh volume with that ownership -
+# without it the volume arrives owned by root and the unprivileged process
+# cannot write the unit files or the event store.
+RUN install -d -o rackphone -g rackphone /repo /repo/units /state
 
 USER rackphone
 
