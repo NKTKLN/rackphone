@@ -4,15 +4,14 @@ __pycache__/
 dist/
 build/
 *.zip
-inventory/*.txt
-!inventory/.gitkeep
+inventory/
 app/build/
 app/.dart_tool/
 dist/
 
-# Monitoring stack is deployment-local, not part of the tracked project.
-monitoring/
-compose.yml
+# Grafana and Prometheus write into these; the definitions are tracked.
+monitoring/grafana/data/
+monitoring/data/
 tests/.tree/
 .pytest_cache/
 .ruff_cache/
@@ -21,8 +20,9 @@ tests/.tree/
 .coverage.*
 coverage.xml
 
-# Holds an ntfy credential; the example file is the tracked one.
+# Both hold an ntfy credential; the example file is the tracked one.
 gateway.toml
+.env
 tests/.tree-msg/
 
 # Локальная инструкция по развёртыванию, не для публикации.
