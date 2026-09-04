@@ -155,10 +155,10 @@ Full reference in [docs/metrics.md](docs/metrics.md).
 ```text
 cli/               host-side CLI, src layout, one package per concern
   src/rackphone/device/    adb and the schema a unit reports
-  src/rackphone/gateway/   SMS and call relay: store, drain loop, ntfy, API
+  src/rackphone/gateway/   SMS and call relay: store, drain loop, filters, ntfy, API
   src/rackphone/metrics/   Prometheus bridge
   src/rackphone/cli/       the command tree, one module per command group
-  tests/                   226 checks, no device required
+  tests/                   258 checks, no device required
 modules/           Magisk modules, one directory per plugin
   rackphone-core/       config store, plugin discovery, on-device `rackphone`
   rackphone-telemetry/  Prometheus collector
@@ -178,7 +178,7 @@ docs/              install walkthrough, plugin contract, metric reference, adb s
 ./tests/run.sh
 ```
 
-**478 checks**: 230 pytest, 155 shell, 66 in the app (38 Dart, 28 Kotlin),
+**506 checks**: 258 pytest, 155 shell, 66 in the app (38 Dart, 28 Kotlin),
 27 live-device. The device tests skip
 themselves when nothing is attached, so the suite runs on a machine with no phone.
 
@@ -190,7 +190,7 @@ themselves when nothing is attached, so the suite runs on a machine with no phon
 | `tests/test_companion.sh` | Which broadcast the plugin sends, and what it reports when the app is not there |
 | `app/test/` | `status.json` parsing, form validation, and the setup screen against a fake unit |
 | `app/android/.../test/` | Dialable numbers, and the per-SIM keepalive arithmetic |
-| `cli/tests/` | Schema validation, unit files, command effects, label injection, device resolution, store dedup, ntfy shaping |
+| `cli/tests/` | Schema validation, unit files, command effects, label injection, device resolution, store dedup, ntfy shaping, notification filters |
 | `tests/test_integration.sh` | A real unit, the bridge, and Prometheus end to end |
 
 The shell suites run the **shipped scripts**, not copies. Module filesystem roots

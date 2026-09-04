@@ -16,6 +16,7 @@ from rackphone import units
 from rackphone.device import adb
 from rackphone.gateway.config import GatewayConfig, NtfyConfig
 from rackphone.gateway.drain import MessageGateway
+from rackphone.gateway.filters import load_rules
 from rackphone.gateway.notify import NtfyForwarder
 from rackphone.gateway.store import EventStore
 
@@ -37,6 +38,12 @@ def device_calls(monkeypatch: pytest.MonkeyPatch) -> list[list[str]]:
     monkeypatch.setattr(adb, "resolve_serial", lambda serial: serial or "AAA")
     monkeypatch.setattr(adb, "run_device_cli", fake_run_device_cli)
     return calls
+
+
+def _record(pushed: list[httpx.Request], request: httpx.Request) -> httpx.Response:
+    """Accept a push and remember the request that carried it."""
+    pushed.append(request)
+    return httpx.Response(200)
 
 
 def make_forwarder(handler: httpx.MockTransport) -> NtfyForwarder:
@@ -176,6 +183,49 @@ class TestForwarding:
         assert gateway.stats.pushed == 0
 
 
+class TestFiltering:
+    @pytest.mark.usefixtures("device_calls", "repo")
+    def test_a_filtered_event_is_stored_but_not_pushed(self, store: EventStore) -> None:
+        # The whole point of filtering at this end: the message is still on the
+        # API afterwards, it just did not wake anybody.
+        pushed: list[httpx.Request] = []
+        config = GatewayConfig(
+            filters=load_rules([{"name": "quiet", "kind": "sms", "contains": "hi"}])
+        )
+        unit = units.create_unit("lisa01", "AAA")
+        gateway = MessageGateway(
+            config,
+            store,
+            make_forwarder(
+                httpx.MockTransport(lambda request: _record(pushed, request))
+            ),
+        )
+
+        assert gateway.drain_unit(unit) == 1
+        assert pushed == []
+        assert gateway.stats.filtered == 1
+        assert len(store.query_events()) == 1
+
+    @pytest.mark.usefixtures("device_calls", "repo")
+    def test_an_unmatched_event_is_pushed_as_before(self, store: EventStore) -> None:
+        pushed: list[httpx.Request] = []
+        config = GatewayConfig(
+            filters=load_rules([{"name": "other", "sender": "beeline"}])
+        )
+        unit = units.create_unit("lisa01", "AAA")
+        gateway = MessageGateway(
+            config,
+            store,
+            make_forwarder(
+                httpx.MockTransport(lambda request: _record(pushed, request))
+            ),
+        )
+
+        gateway.drain_unit(unit)
+        assert len(pushed) == 1
+        assert gateway.stats.filtered == 0
+
+
 class TestStats:
     @pytest.mark.usefixtures("device_calls", "repo")
     def test_counters_are_reported_for_the_api(self, store: EventStore) -> None:
@@ -185,6 +235,7 @@ class TestStats:
         assert gateway.stats.as_dict() == {
             "drained": 1,
             "stored": 1,
+            "filtered": 0,
             "pushed": 0,
             "push_failed": 0,
             "errors": 0,

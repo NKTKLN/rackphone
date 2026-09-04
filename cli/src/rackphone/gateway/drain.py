@@ -3,7 +3,8 @@
 Ordering is the whole contract. Events are acked on the device only after they
 are committed to the store, so an interruption in between means the batch is
 re-delivered rather than lost. Duplicates are absorbed by the store's UNIQUE
-constraint, and only genuinely new events reach the forwarder.
+constraint, and only genuinely new events reach the forwarder - where the
+configured filters get the last word on whether one is worth a notification.
 """
 
 from __future__ import annotations
@@ -14,6 +15,7 @@ from dataclasses import asdict, dataclass
 from rackphone import render, units
 from rackphone.device import adb
 from rackphone.gateway.config import GatewayConfig
+from rackphone.gateway.filters import first_match
 from rackphone.gateway.notify import NtfyError, NtfyForwarder
 from rackphone.gateway.store import Event, EventStore
 
@@ -33,6 +35,7 @@ class GatewayStats:
 
     drained: int = 0
     stored: int = 0
+    filtered: int = 0
     pushed: int = 0
     push_failed: int = 0
     errors: int = 0
@@ -115,6 +118,10 @@ class MessageGateway:
     def _forward(self, unit_name: str, events: list[Event]) -> None:
         """Push newly stored events to the notification sink.
 
+        Events a filter matches are counted and skipped rather than pushed.
+        They stay in the store either way: a filter decides what is worth an
+        alert, not what is worth keeping.
+
         Args:
             unit_name: Unit the events came from, for the warning text.
             events: Events that were new to the store.
@@ -122,6 +129,14 @@ class MessageGateway:
         if self.forwarder is None:
             return
         for event in events:
+            rule = first_match(event, self.config.filters)
+            if rule is not None:
+                # Suppressed, not dropped: the event is already committed and
+                # is served on the API. Saying which rule ate it is the only
+                # way an over-broad filter is ever noticed.
+                self.stats.filtered += 1
+                render.dim(f"{unit_name}: {event.kind} filtered by {rule.name!r}")
+                continue
             try:
                 if self.forwarder.send(event):
                     self.stats.pushed += 1

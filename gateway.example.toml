@@ -19,3 +19,24 @@ priority_sms = "default"
 priority_call = "high"
 timeout = 10.0
 retries = 3
+
+# Filters decide what is worth a notification. A matched event is still stored
+# and still served on the API - only the push is suppressed - so a rule that
+# turns out to be too broad costs you an alert, never a message.
+#
+# Keys inside a rule are ANDed, values inside a key are ORed, and all matching
+# is case-insensitive: `sender` is a glob, `contains` a substring, `matches` a
+# regular expression over the body. A rule with no conditions is refused rather
+# than applied.
+#
+# [[filters]]
+# name = "beeline-app-links"
+# kind = "sms"
+# sender = "beeline"
+# contains = "https://dl.beeline.ru/"
+#
+# [[filters]]
+# name = "operator-ads"
+# kind = "sms"
+# sender = ["beeline", "mtc", "megafon", "tele2"]
+# matches = "(акци|тариф|подключ|скидк)"

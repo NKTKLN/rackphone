@@ -11,8 +11,24 @@ from rackphone.cli.context import EXIT_FAILURE, EXIT_OK
 from rackphone.gateway.api import create_app
 from rackphone.gateway.config import GatewayConfig, get_config_path
 from rackphone.gateway.drain import MessageGateway
+from rackphone.gateway.filters import FilterConfigError
 from rackphone.gateway.notify import NtfyForwarder
 from rackphone.gateway.store import EventStore
+
+
+def _load_config() -> GatewayConfig | None:
+    """Read the gateway configuration, reporting an unusable filter rule.
+
+    Returns:
+        The resolved configuration, or None if a rule could not be honoured.
+    """
+    try:
+        return GatewayConfig.load()
+    except FilterConfigError as exc:
+        # Starting anyway would mean running with a filter that suppresses more
+        # than it was written to, and silence is the one failure nobody sees.
+        render.error(f"{get_config_path()}: {exc}")
+        return None
 
 
 def run_gateway(args: argparse.Namespace) -> int:
@@ -24,7 +40,9 @@ def run_gateway(args: argparse.Namespace) -> int:
     Returns:
         The command exit code.
     """
-    config = GatewayConfig.load()
+    config = _load_config()
+    if config is None:
+        return EXIT_FAILURE
     if args.host:
         config.api_host = args.host
     if args.port:
@@ -39,6 +57,8 @@ def run_gateway(args: argparse.Namespace) -> int:
             "ntfy is not configured; events are stored and served but not pushed"
         )
         render.dim(f"  set ntfy.url and ntfy.topic in {get_config_path()}")
+    elif config.filters:
+        render.dim(f"  {len(config.filters)} filter rule(s) applied before pushing")
 
     if args.once:
         return _drain_once(gateway)
@@ -62,6 +82,8 @@ def _drain_once(gateway: MessageGateway) -> int:
     stored = gateway.run_once()
     stats = gateway.stats
     render.ok(f"drained {stats.drained} event(s), {stored} new, {stats.pushed} pushed")
+    if stats.filtered:
+        render.dim(f"  {stats.filtered} suppressed by filters, stored either way")
     if stats.push_failed:
         render.warn(f"  {stats.push_failed} push failure(s)")
     return EXIT_FAILURE if stats.errors else EXIT_OK
@@ -76,10 +98,28 @@ def show_gateway_config(_args: argparse.Namespace) -> int:
     Returns:
         The command exit code.
     """
-    config = GatewayConfig.load()
+    config = _load_config()
+    if config is None:
+        return EXIT_FAILURE
+
     render.table(
         "Gateway configuration",
         ["KEY", "VALUE"],
         [[key, value] for key, value in config.as_redacted_dict().items()],
     )
+    if config.filters:
+        # Printed in file order, because that is the order they are tested in
+        # and the first match is the one that suppresses.
+        render.table(
+            "Notification filters",
+            ["RULE", "STATE", "MATCHES"],
+            [
+                [
+                    rule.name,
+                    "on" if rule.enabled else "off",
+                    rule.describe(),
+                ]
+                for rule in config.filters
+            ],
+        )
     return EXIT_OK

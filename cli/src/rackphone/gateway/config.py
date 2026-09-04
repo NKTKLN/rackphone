@@ -15,6 +15,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from rackphone.gateway.filters import FilterRule, load_rules
+
 DEFAULT_CONFIG_PATH = "~/.config/rackphone/gateway.toml"
 DEFAULT_POLL_SECONDS = 5.0
 DEFAULT_API_HOST = "127.0.0.1"
@@ -128,6 +130,7 @@ class GatewayConfig:
     api_token: str = ""
     database_path: str = ""
     ntfy: NtfyConfig = field(default_factory=NtfyConfig)
+    filters: list[FilterRule] = field(default_factory=list)
 
     @classmethod
     def load(cls, path: Path | None = None) -> GatewayConfig:
@@ -138,6 +141,11 @@ class GatewayConfig:
 
         Returns:
             The resolved configuration. A missing file is not an error.
+
+        Raises:
+            FilterConfigError: If a `[[filters]]` rule is unusable. Refusing to
+                start beats starting with a rule that silences more than it was
+                meant to.
         """
         config_path = path or get_config_path()
         data: dict[str, Any] = {}
@@ -169,7 +177,24 @@ class GatewayConfig:
                 "RACKPHONE_DB_PATH", gateway_section.get("db_path", "")
             ),
             ntfy=NtfyConfig.from_dict(data.get("ntfy", {})),
+            # Rules, not a scalar, so there is no environment override: a
+            # container points RACKPHONE_GATEWAY_CONFIG at a mounted file.
+            filters=load_rules(data.get("filters")),
         )
+
+    def _describe_filters(self) -> str:
+        """Summarise the notification filters for the config listing.
+
+        Returns:
+            How many rules exist, and how many of them are switched off.
+        """
+        if not self.filters:
+            return "none"
+        disabled = sum(1 for rule in self.filters if not rule.enabled)
+        # A rule left in the file but disabled is not filtering anything, and a
+        # bare count would read as though it were.
+        suffix = f", {disabled} off" if disabled else ""
+        return f"{len(self.filters)} rule(s){suffix}"
 
     def as_redacted_dict(self) -> dict[str, str]:
         """Render the configuration for display, hiding every secret.
@@ -186,4 +211,5 @@ class GatewayConfig:
             "ntfy_user": self.ntfy.user or "unset",
             "ntfy_password": mask_secret(self.ntfy.password),
             "ntfy_token": mask_secret(self.ntfy.token),
+            "filters": self._describe_filters(),
         }

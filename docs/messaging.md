@@ -170,7 +170,7 @@ quietly false.
 Host settings live **outside the repo**, because they include an ntfy
 credential: `~/.config/rackphone/gateway.toml`, overridable per-key by
 `RACKPHONE_*` environment variables. `gateway.example.toml` is the tracked copy
-and ships blank.
+and ships blank. It is also where the notification [filters](#filters) live.
 
 ```sh
 uv run --project cli rackphone gwconfig   # secrets shown as set/unset only
@@ -255,6 +255,75 @@ for a relay like this, all are.
 | Incoming call | `rackphone,call,incoming` |
 | Missed call | `rackphone,call,missed` |
 | Rejected / blocked | `rackphone,call,rejected` / `,blocked` |
+
+## Filters
+
+Not everything that arrives is worth a notification. An operator that sends the
+verification codes also sends the adverts, from the same sender, and on a racked
+unit an alert nobody acts on trains you to stop reading them.
+
+Filters are host-side rules in `gateway.toml` that decide what gets pushed:
+
+```toml
+[[filters]]
+name = "beeline-app-links"
+kind = "sms"
+sender = "beeline"
+contains = "https://dl.beeline.ru/"
+```
+
+**A filter suppresses the push, never the record.** The message is still
+committed, still on `GET /api/messages`, still on the stream — only the ntfy
+call is skipped, and the counter says how often:
+
+```sh
+curl -s localhost:9106/health | jq .gateway.filtered
+```
+
+That is the whole reason filtering happens here and not on the phone. The device
+side already has `collect_sms=0`, which really does drop messages, and a rule
+with a typo in it is indistinguishable from a message that never arrived. Costing
+you an alert is recoverable; costing you the SMS is not.
+
+| Key | Matches |
+| --- | --- |
+| `name` | Label reported in `gwconfig`, in the drain log and nowhere else |
+| `unit` | Unit name, as in `units/*.env` |
+| `kind` | `sms` or `call` |
+| `sender` | The address, as a glob: `beeline`, `beeline*`, `+7900*` |
+| `contains` | A substring of the body |
+| `matches` | A regular expression over the body |
+| `enabled` | `false` parks a rule without deleting it |
+
+Keys within a rule are **ANDed** and values within a key are **ORed**, so the
+narrow rule — this sender, and this text — is what falls out of writing the
+obvious thing, and widening one means adding values rather than rules:
+
+```toml
+[[filters]]
+name = "operator-ads"
+kind = "sms"
+sender = ["beeline", "megafon", "tele2"]
+matches = "(акци|тариф|подключ)"
+```
+
+All matching is case-insensitive: the case an operator writes its own name in is
+its choice, not something to encode in a rule that then breaks when they change
+it. Rules are tested in file order and the first match wins.
+
+Two rules are refused at startup rather than applied, because both fail as
+silence: one with **no conditions**, which would suppress everything, and one
+with an **unknown key**, since `contain` instead of `contains` would quietly
+widen a filter from one advert to every SMS. The gateway will not start until
+the file is fixed.
+
+```sh
+uv run --project cli rackphone gwconfig   # lists every rule and what it matches
+```
+
+A rule that reads the body cannot match when `include_body=0`: nothing was
+relayed, so the condition cannot be shown to hold, and an unproven filter pushes
+rather than suppresses.
 
 ## Privacy
 

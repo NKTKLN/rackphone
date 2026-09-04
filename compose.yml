@@ -75,9 +75,13 @@ services:
       RACKPHONE_NTFY_PASSWORD: ${RACKPHONE_NTFY_PASSWORD:-}
       RACKPHONE_NTFY_TOKEN: ${RACKPHONE_NTFY_TOKEN:-}
       RACKPHONE_API_TOKEN: ${RACKPHONE_API_TOKEN:-}
+      # Notification filters are rules, not a scalar, so no environment
+      # variable can carry them. Mount a config file and point at it:
+      #   RACKPHONE_GATEWAY_CONFIG: /config/gateway.toml
     volumes:
       - repo:/repo
       - state:/state
+      # - ./gateway.toml:/config/gateway.toml:ro
     # Loopback on purpose: the API serves message bodies, and the token above
     # is what has to be set before this is widened.
     ports:
