@@ -1,5 +1,9 @@
-import 'package:flutter/material.dart';
+import 'dart:async';
 
+import 'package:flutter/material.dart';
+import 'package:flutter_foreground_task/flutter_foreground_task.dart';
+
+import '../service/event_service.dart';
 import '../session/session_controller.dart';
 import 'home_page.dart';
 import 'sign_in_page.dart';
@@ -16,10 +20,62 @@ class RackphoneApp extends StatefulWidget {
 }
 
 class _RackphoneAppState extends State<RackphoneApp> {
+  SessionStatus _lastStatus = SessionStatus.unknown;
+
   @override
   void initState() {
     super.initState();
+    widget.sessionController.addListener(_sessionChanged);
     widget.sessionController.restore();
+  }
+
+  void _sessionChanged() {
+    final status = widget.sessionController.state.status;
+    if (status == _lastStatus) return;
+    _lastStatus = status;
+    if (status == SessionStatus.signedIn) {
+      unawaited(_beginLiveDelivery());
+    } else if (status == SessionStatus.signedOut) {
+      unawaited(_stopLiveDelivery());
+    }
+  }
+
+  Future<void> _beginLiveDelivery() async {
+    try {
+      final permission =
+          await FlutterForegroundTask.checkNotificationPermission();
+      if (permission != NotificationPermission.granted) {
+        await FlutterForegroundTask.requestNotificationPermission();
+      }
+      await EventService.start(widget.sessionController.tokenStore);
+    } catch (_) {
+      // Delivery setup must not replace a valid signed-in screen with a crash;
+      // the next session transition can try the platform boundary again.
+    }
+  }
+
+  Future<void> _stopLiveDelivery() async {
+    try {
+      await EventService.stop();
+    } catch (_) {
+      // A service already removed by Android is the desired signed-out state.
+    }
+  }
+
+  @override
+  void didUpdateWidget(covariant RackphoneApp oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.sessionController == widget.sessionController) return;
+    oldWidget.sessionController.removeListener(_sessionChanged);
+    widget.sessionController.addListener(_sessionChanged);
+    _lastStatus = SessionStatus.unknown;
+    _sessionChanged();
+  }
+
+  @override
+  void dispose() {
+    widget.sessionController.removeListener(_sessionChanged);
+    super.dispose();
   }
 
   @override

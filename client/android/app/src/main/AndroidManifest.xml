@@ -1,4 +1,16 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- Android 13 gates both arrival alerts and the foreground service's
+         permanent explanation behind notification permission. -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
+    <!-- The live gateway connection must remain active when no screen is
+         visible, which requires Android's foreground-service contract. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE"/>
+    <!-- The service continuously receives gateway event data, so Android 14
+         requires the dataSync foreground-service type permission. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC"/>
+    <!-- The CPU must stay awake long enough to receive and process SSE frames
+         while the display is asleep. -->
+    <uses-permission android:name="android.permission.WAKE_LOCK"/>
     <application
         android:label="Rackphone"
         android:name="${applicationName}"
@@ -25,6 +37,12 @@
                 <category android:name="android.intent.category.LAUNCHER"/>
             </intent-filter>
         </activity>
+        <!-- The foreground-task plugin owns the Android service while Dart owns
+             its one authenticated SSE connection. -->
+        <service
+            android:name="com.pravera.flutter_foreground_task.service.ForegroundService"
+            android:foregroundServiceType="dataSync"
+            android:exported="false" />
         <!-- Don't delete the meta-data below.
              This is used by the Flutter tool to generate GeneratedPluginRegistrant.java -->
         <meta-data

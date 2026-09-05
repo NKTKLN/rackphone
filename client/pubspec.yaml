@@ -18,6 +18,13 @@ dependencies:
   # The refresh token is what a lost phone would hand over, so it lives behind
   # the Android Keystore rather than in a file this app can read on its own.
   flutter_secure_storage: ^9.2.4
+  # A stream that outlives the screen needs a foreground service; Android kills
+  # a plain isolate as soon as the app stops being visible, and the whole point
+  # of this connection is to be there when it is not.
+  flutter_foreground_task: ^8.17.0
+  # Posting what arrives. The service keeps its own permanent notification; each
+  # message needs one of its own.
+  flutter_local_notifications: ^18.0.1
 
 dev_dependencies:
   flutter_test:
