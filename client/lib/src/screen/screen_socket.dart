@@ -20,6 +20,17 @@ final class ScreenCloseReason {
 
   final ScreenCloseKind kind;
   final String message;
+
+  /// The device holding the screen, when that is why this one was refused.
+  ///
+  /// Parsed here rather than in a widget: the wire format belongs to the layer
+  /// that already knows it, and a screen that strips protocol tokens itself is
+  /// a screen that breaks when the token changes.
+  String? get holder {
+    if (kind != ScreenCloseKind.heldByAnotherDevice) return null;
+    final name = message.replaceFirst(sessionBusyReason, '').trim();
+    return name.isEmpty ? null : name;
+  }
 }
 
 /// A failure which prevented the screen WebSocket from being established.

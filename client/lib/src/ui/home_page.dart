@@ -1,6 +1,9 @@
 import 'package:flutter/material.dart';
 
+import '../api/gateway_client.dart';
 import '../data/feed_controller.dart';
+import '../screen/decoder.dart';
+import '../screen/screen_controller.dart';
 import '../session/session_controller.dart';
 import 'pages/feed_page.dart';
 import 'pages/messages_page.dart';
@@ -37,17 +40,35 @@ class _HomePageState extends State<HomePage> {
   int _destination = 0;
   FeedController? _feedController;
   String? _feedUnit;
+  ScreenController? _screenController;
+  String? _screenUnit;
 
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
     _updateFeedController();
+    _updateScreenController();
   }
 
   @override
   void didUpdateWidget(covariant HomePage oldWidget) {
     super.didUpdateWidget(oldWidget);
     _updateFeedController();
+    _updateScreenController();
+  }
+
+  void _updateScreenController() {
+    final unit = widget.controller.selectedUnit;
+    final gateway = widget.controller.gateway;
+    if (unit == null || gateway == null) return;
+    if (_screenUnit == unit.name && _screenController != null) return;
+    _screenController?.dispose();
+    _screenUnit = unit.name;
+    _screenController = ScreenController(
+      socketFactory: () async =>
+          ScreenSocketConnection(await gateway.screen(unit.name)),
+      decoder: HardwareScreenDecoder(),
+    );
   }
 
   void _updateFeedController() {
@@ -107,7 +128,11 @@ class _HomePageState extends State<HomePage> {
         key: ValueKey('messages-${unit.name}'),
         controller: feed,
       ),
-      _ => ScreenPage(key: ValueKey('screen-${unit.name}'), unit: unit),
+      _ => ScreenPage(
+        key: ValueKey('screen-${unit.name}'),
+        unit: unit,
+        controller: _screenController,
+      ),
     };
   }
 }

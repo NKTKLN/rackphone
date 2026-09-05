@@ -6,6 +6,10 @@ import 'package:rackphone_client/src/api/gateway_client.dart';
 import 'package:rackphone_client/src/api/errors.dart';
 import 'package:rackphone_client/src/api/models.dart';
 import 'package:rackphone_client/src/data/feed_controller.dart';
+import 'package:rackphone_client/src/screen/decoder.dart';
+import 'package:rackphone_client/src/screen/protocol.dart';
+import 'package:rackphone_client/src/screen/screen_controller.dart';
+import 'package:rackphone_client/src/screen/screen_socket.dart';
 import 'package:rackphone_client/src/ui/pages/feed_page.dart';
 import 'package:rackphone_client/src/ui/pages/messages_page.dart';
 import 'package:rackphone_client/src/ui/pages/overview_page.dart';
@@ -135,6 +139,81 @@ void main() {
       findsOneWidget,
     );
   });
+
+  testWidgets('held screen is distinct from a network failure', (tester) async {
+    final held = _PageScreenConnection();
+    final heldController = ScreenController(
+      socketFactory: () async => held,
+      decoder: FakeScreenDecoder(),
+    );
+    await tester.pumpWidget(
+      _app(
+        ScreenPage(
+          unit: _unit(capabilities: {'screen'}),
+          controller: heldController,
+        ),
+      ),
+    );
+    await tester.pump();
+    held.finish(
+      const ScreenCloseReason(
+        ScreenCloseKind.heldByAnotherDevice,
+        'session_busy Desk tablet',
+      ),
+    );
+    // Two pumps: one for the completer's microtask to reach the controller,
+    // one for the rebuild it asks for.
+    await tester.pump();
+    await tester.pump();
+    expect(find.text('Screen is held by Desk tablet.'), findsOneWidget);
+    expect(find.textContaining('failed'), findsNothing);
+  });
+
+  testWidgets('a network failure reads differently from a refusal', (
+    tester,
+  ) async {
+    final failed = _PageScreenConnection();
+    final failedController = ScreenController(
+      socketFactory: () async => failed,
+      decoder: FakeScreenDecoder(),
+    );
+    await tester.pumpWidget(
+      _app(
+        ScreenPage(
+          unit: _unit(capabilities: {'screen'}),
+          controller: failedController,
+        ),
+      ),
+    );
+    await tester.pump();
+    failed.finish(
+      const ScreenCloseReason(ScreenCloseKind.networkFailure, 'offline'),
+    );
+    await tester.pump();
+    await tester.pump();
+    expect(
+      find.textContaining('Screen connection failed: offline'),
+      findsOneWidget,
+    );
+    expect(find.textContaining('held by'), findsNothing);
+  });
+}
+
+final class _PageScreenConnection implements ScreenConnection {
+  final _closed = Completer<ScreenCloseReason>();
+
+  void finish(ScreenCloseReason reason) => _closed.complete(reason);
+
+  @override
+  Future<ScreenCloseReason> get closed => _closed.future;
+  @override
+  Stream<DeviceInfo> get device => const Stream.empty();
+  @override
+  Stream<VideoPacket> get video => const Stream.empty();
+  @override
+  Future<void> close() async {}
+  @override
+  void send(List<int> controlMessage) {}
 }
 
 Widget _app(Widget child) => MaterialApp(home: Scaffold(body: child));
