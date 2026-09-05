@@ -25,6 +25,7 @@ from rackphone.gateway.auth import (
     SCOPE_ADMIN,
     SCOPE_CONTROL,
     SCOPE_READ,
+    AccessClaims,
     verify_password,
 )
 from rackphone.gateway.config import DEFAULT_TRUSTED_PROXIES, GatewayConfig
@@ -32,6 +33,7 @@ from rackphone.gateway.drain import MessageGateway
 from rackphone.gateway.login import LoginService, RefusalReason, Tokens
 from rackphone.gateway.presence import ClientPresence
 from rackphone.gateway.send import SendError, send_sms
+from rackphone.gateway.session import SessionBusy, SessionManager
 from rackphone.gateway.store import (
     DEFAULT_QUERY_LIMIT,
     KIND_CALL,
@@ -131,12 +133,13 @@ def _tokens_body(tokens: Tokens) -> dict[str, str | int]:
     }
 
 
-def create_app(  # noqa: C901, PLR0915
+def create_app(  # noqa: C901, PLR0913, PLR0915, PLR0917
     config: GatewayConfig,
     store: EventStore,
     login: LoginService,
     gateway: MessageGateway | None = None,
     presence: ClientPresence | None = None,
+    sessions: SessionManager | None = None,
 ) -> FastAPI:
     """Build the FastAPI application served by `rackphone gateway`.
 
@@ -146,12 +149,14 @@ def create_app(  # noqa: C901, PLR0915
         login: Authentication policy service.
         gateway: Running drain loop whose counters are exposed by the API.
         presence: Shared tracker for live event streams.
+        sessions: Shared screen-session owner, or an empty local manager.
 
     Returns:
         FastAPI: The configured application.
     """
     legacy_enabled = bool(config.api_token and _is_loopback(config.api_host))
     client_presence = presence or ClientPresence()
+    screen_sessions = sessions or SessionManager()
     if config.api_token and not legacy_enabled:
         # Removing this outright would break the running compose deployment;
         # honouring it on a public bind would leave a shared static secret
@@ -194,6 +199,44 @@ def create_app(  # noqa: C901, PLR0915
     read_auth = [Depends(require_scope(SCOPE_READ))]
     control_auth = [Depends(require_scope(SCOPE_CONTROL))]
     admin_auth = [Depends(require_scope(SCOPE_ADMIN))]
+
+    def control_holder(authorization: Annotated[str, Header()] = "") -> str:
+        """Authenticate a control token and return its device label."""
+        # Callers take this as a default value, never as `Annotated[...,
+        # Depends(control_holder)]`. This module postpones its annotations, so
+        # FastAPI would evaluate that string against module globals, fail to
+        # find this closure, and quietly treat `holder` as a query parameter -
+        # letting any caller name itself the session's owner.
+        prefix = "Bearer "
+        token = (
+            authorization.removeprefix(prefix)
+            if authorization.startswith(prefix)
+            else ""
+        )
+        claims: AccessClaims | None = login.authorise(
+            token, int(time.time()), SCOPE_CONTROL
+        )
+        if claims is not None:
+            session = next(
+                (
+                    item
+                    for item in login.store.list_refresh()
+                    if item.id == claims.refresh_id
+                ),
+                None,
+            )
+            if session is not None:
+                return session.device_label
+        if legacy_enabled and hmac.compare_digest(token, config.api_token):
+            return "legacy"
+        raise HTTPException(HTTPStatus.UNAUTHORIZED, "invalid or missing bearer token")
+
+    def screen_unit(unit: str) -> None:
+        """Require a configured unit with the screen capability."""
+        if not any(item.name == unit for item in units.load_all_units()):
+            raise HTTPException(HTTPStatus.NOT_FOUND, "unknown unit")
+        if "screen" not in config.capabilities_for(unit):
+            raise HTTPException(HTTPStatus.FORBIDDEN, "unit capability denied")
 
     def permitted_rows(
         kind: str | None,
@@ -272,6 +315,68 @@ def create_app(  # noqa: C901, PLR0915
             "gateway": gateway.stats.as_dict() if gateway else None,
             "security": login.store.security_summary(int(time.time())),
         }
+
+    @app.post("/api/units/{unit}/session")
+    def acquire_screen_session(
+        unit: str, holder: str = Depends(control_holder)
+    ) -> dict[str, Any]:
+        """Acquire exclusive screen ownership for the calling device."""
+        screen_unit(unit)
+        now = screen_sessions.clock()
+        try:
+            session = screen_sessions.acquire(unit, holder, now)
+        except SessionBusy as exc:
+            raise HTTPException(
+                HTTPStatus.CONFLICT,
+                {"holder": exc.holder, "since": exc.started_at},
+            ) from exc
+        login.store.record_audit(now, "session_acquire", actor=holder, subject=unit)
+        return asdict(session)
+
+    @app.post("/api/units/{unit}/session/takeover")
+    def take_over_screen_session(
+        unit: str, holder: str = Depends(control_holder)
+    ) -> dict[str, Any]:
+        """Explicitly replace the current screen owner."""
+        screen_unit(unit)
+        now = screen_sessions.clock()
+        session = screen_sessions.take_over(unit, holder, now)
+        login.store.record_audit(now, "session_takeover", actor=holder, subject=unit)
+        return asdict(session)
+
+    @app.post(
+        "/api/units/{unit}/session/heartbeat",
+        status_code=HTTPStatus.NO_CONTENT,
+    )
+    def heartbeat_screen_session(
+        unit: str, holder: str = Depends(control_holder)
+    ) -> None:
+        """Renew screen ownership only for the device that holds it."""
+        screen_unit(unit)
+        if (
+            screen_sessions.heartbeat(unit, screen_sessions.clock(), holder=holder)
+            is None
+        ):
+            raise HTTPException(HTTPStatus.CONFLICT, "caller is not the holder")
+
+    @app.delete("/api/units/{unit}/session", status_code=HTTPStatus.NO_CONTENT)
+    def release_screen_session(
+        unit: str, holder: str = Depends(control_holder)
+    ) -> None:
+        """Release the unit screen whether or not it has a recorded owner."""
+        screen_unit(unit)
+        now = screen_sessions.clock()
+        screen_sessions.release(unit, now)
+        login.store.record_audit(now, "session_release", actor=holder, subject=unit)
+
+    @app.get("/api/units/{unit}/session")
+    def read_screen_session(
+        unit: str, _holder: str = Depends(control_holder)
+    ) -> dict[str, Any] | None:
+        """Return the current screen owner, if the unit has one."""
+        screen_unit(unit)
+        session = screen_sessions.get(unit)
+        return None if session is None else asdict(session)
 
     @app.get("/api/units/{unit}/telemetry", dependencies=read_auth)
     def read_telemetry(unit: str) -> dict[str, Any]:

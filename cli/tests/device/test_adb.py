@@ -253,3 +253,41 @@ class TestPush:
         )
         with pytest.raises(adb.AdbError, match="no space left"):
             adb.push_file("AAA", LOCAL_ZIP, REMOTE_ZIP)
+
+
+class TestForward:
+    """Host ports delegated to adb rather than hard-coded by the gateway."""
+
+    def test_ephemeral_forward_returns_the_bound_port(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Return adb's selected port and preserve fixed argument boundaries."""
+        calls: list[list[str]] = []
+
+        def answer(command: list[str], **_kwargs: object) -> FakeCompletedProcess:
+            calls.append(command)
+            return FakeCompletedProcess(stdout="43123\n")
+
+        monkeypatch.setattr(adb, "find_adb_binary", lambda: "/usr/bin/adb")
+        monkeypatch.setattr(adb.subprocess, "run", answer)
+        assert adb.forward("AAA", "tcp:0", "localabstract:scrcpy") == "43123"
+        assert calls[0][-5:] == [
+            "-s",
+            "AAA",
+            "forward",
+            "tcp:0",
+            "localabstract:scrcpy",
+        ]
+
+    def test_remove_forward_uses_the_named_local_endpoint(
+        self, fake_subprocess: list[list[str]]
+    ) -> None:
+        """Remove precisely the endpoint owned by the closing session."""
+        adb.remove_forward("AAA", "tcp:43123")
+        assert fake_subprocess[0][-5:] == [
+            "-s",
+            "AAA",
+            "forward",
+            "--remove",
+            "tcp:43123",
+        ]

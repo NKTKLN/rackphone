@@ -16,6 +16,7 @@ import pytest
 from conftest import EventFactory
 from fastapi.testclient import TestClient
 
+from rackphone.device import adb
 from rackphone.gateway import api
 from rackphone.gateway.api import client_ip, create_app, iter_new_events
 from rackphone.gateway.auth import SCOPE_CONTROL, SCOPE_READ, hash_password
@@ -24,6 +25,7 @@ from rackphone.gateway.config import AdminConfig, GatewayConfig, NtfyConfig
 from rackphone.gateway.drain import MessageGateway
 from rackphone.gateway.login import LoginService
 from rackphone.gateway.presence import ClientPresence
+from rackphone.gateway.session import SessionManager
 from rackphone.gateway.store import EventStore
 
 HTTP_OK = 200
@@ -33,6 +35,8 @@ HTTP_LOCKED = 423
 HTTP_BAD_REQUEST = 400
 HTTP_NOT_FOUND = 404
 HTTP_BAD_GATEWAY = 502
+HTTP_CONFLICT = 409
+HTTP_NO_CONTENT = 204
 
 
 @pytest.fixture
@@ -624,6 +628,139 @@ def test_health_stays_open_so_a_probe_still_works(
         create_app(config, populated_store, LoginService(config, auth_store))
     ) as client:
         assert client.get("/health").status_code == HTTP_OK
+    auth_store.close()
+
+
+def test_the_session_holder_cannot_be_named_by_the_caller(
+    populated_store: EventStore,
+    tmp_path: Path,
+    repo: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # The holder comes from the token, never from the request. Taking it as an
+    # annotated dependency in a module that postpones annotations quietly turns
+    # it into a query parameter, and then anyone is anyone.
+    (repo / "units" / "lisa01.env").write_text("")
+    config = GatewayConfig(
+        admin=AdminConfig("admin", hash_password("right")),
+        unit_capabilities={"lisa01": frozenset({"screen"})},
+    )
+    auth_store = AuthStore(tmp_path / "auth.db")
+    login = LoginService(config, auth_store)
+    granted = login.log_in("admin", "right", "peer", "tablet", 1000)
+    assert granted.tokens is not None
+    # The token was issued at 1000 and lives fifteen minutes; the route reads
+    # the real clock unless it is told otherwise.
+    monkeypatch.setattr(api.time, "time", lambda: 1000)
+    monkeypatch.setattr(adb, "resolve_serial", lambda serial: serial or "AAA")
+    monkeypatch.setattr(adb, "run_device_cli", lambda *_args, **_kwargs: "")
+    monkeypatch.setattr(adb, "forward", lambda *_args: "43123")
+    monkeypatch.setattr(adb, "remove_forward", lambda *_args: None)
+
+    with TestClient(
+        create_app(
+            config,
+            populated_store,
+            login,
+            sessions=SessionManager(clock=lambda: 1000),
+        )
+    ) as client:
+        held = client.post(
+            "/api/units/lisa01/session",
+            params={"holder": "somebody-else"},
+            headers={"Authorization": f"Bearer {granted.tokens.access}"},
+        )
+
+    assert held.status_code == HTTP_OK
+    assert held.json()["holder"] == "tablet"
+    auth_store.close()
+
+
+def test_screen_session_routes_enforce_ownership_and_capability(
+    populated_store: EventStore,
+    tmp_path: Path,
+    repo: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Exercise every screen route and its ownership status responses."""
+    (repo / "units" / "screen.env").write_text("unit.serial=AAA\n")
+    (repo / "units" / "messages.env").write_text("unit.serial=BBB\n")
+    config = GatewayConfig(
+        admin=AdminConfig("admin", hash_password("right")),
+        unit_capabilities={"messages": frozenset({"sms"})},
+    )
+    auth_store = AuthStore(tmp_path / "auth.db")
+    login = LoginService(config, auth_store)
+    tablet = login.log_in("admin", "right", "peer", "tablet", 1000)
+    laptop = login.log_in("admin", "right", "peer", "laptop", 1000)
+    assert tablet.tokens is not None
+    assert laptop.tokens is not None
+    monkeypatch.setattr(api.time, "time", lambda: 1000)
+    monkeypatch.setattr(adb, "resolve_serial", lambda serial: serial or "AAA")
+    monkeypatch.setattr(adb, "run_device_cli", lambda *_args: "")
+    monkeypatch.setattr(adb, "forward", lambda *_args: "43123")
+    monkeypatch.setattr(adb, "remove_forward", lambda *_args: None)
+    manager = SessionManager(clock=lambda: 1000)
+
+    def bearer(token: str) -> dict[str, str]:
+        return {"Authorization": f"Bearer {token}"}
+
+    tablet_headers = bearer(tablet.tokens.access)
+    laptop_headers = bearer(laptop.tokens.access)
+    with TestClient(
+        create_app(config, populated_store, login, sessions=manager)
+    ) as client:
+        missing = client.post("/api/units/missing/session", headers=tablet_headers)
+        assert missing.status_code == HTTP_NOT_FOUND
+        assert (
+            client.post(
+                "/api/units/messages/session", headers=tablet_headers
+            ).status_code
+            == HTTP_FORBIDDEN
+        )
+        acquired = client.post("/api/units/screen/session", headers=tablet_headers)
+        assert acquired.status_code == HTTP_OK
+        assert acquired.json()["holder"] == "tablet"
+        busy = client.post("/api/units/screen/session", headers=laptop_headers)
+        assert busy.status_code == HTTP_CONFLICT
+        assert busy.json()["detail"] == {"holder": "tablet", "since": 1000}
+        assert (
+            client.post(
+                "/api/units/screen/session/heartbeat", headers=tablet_headers
+            ).status_code
+            == HTTP_NO_CONTENT
+        )
+        takeover = client.post(
+            "/api/units/screen/session/takeover", headers=laptop_headers
+        )
+        assert takeover.status_code == HTTP_OK
+        assert takeover.json()["holder"] == "laptop"
+        assert (
+            client.post(
+                "/api/units/screen/session/heartbeat", headers=tablet_headers
+            ).status_code
+            == HTTP_CONFLICT
+        )
+        current = client.get("/api/units/screen/session", headers=laptop_headers)
+        assert current.status_code == HTTP_OK
+        assert current.json()["holder"] == "laptop"
+        assert (
+            client.delete(
+                "/api/units/screen/session", headers=laptop_headers
+            ).status_code
+            == HTTP_NO_CONTENT
+        )
+        assert (
+            client.delete(
+                "/api/units/screen/session", headers=laptop_headers
+            ).status_code
+            == HTTP_NO_CONTENT
+        )
+        empty = client.get("/api/units/screen/session", headers=laptop_headers)
+        assert empty.status_code == HTTP_OK
+        assert empty.json() is None
+    actions = {row["action"] for row in auth_store.query_audit()}
+    assert {"session_acquire", "session_takeover", "session_release"} <= actions
     auth_store.close()
 
 

@@ -224,6 +224,53 @@ def run_device_cli(
         raise
 
 
+def forward(serial: str, local: str, remote: str) -> str:
+    """Forward a host TCP endpoint to a device socket.
+
+    Args:
+        serial: Serial of the target device.
+        local: Host endpoint, such as ``tcp:0`` for an ephemeral port.
+        remote: Device endpoint receiving the forwarded connection.
+
+    Returns:
+        The local port actually bound by adb.
+
+    Raises:
+        AdbError: If adb cannot establish the forward.
+    """
+    completed = subprocess.run(  # noqa: S603 - fixed argv, no shell involved
+        [*build_adb_command(), "-s", serial, "forward", local, remote],
+        capture_output=True,
+        text=True,
+        timeout=DEFAULT_TIMEOUT_SECONDS,
+        check=False,
+    )
+    if completed.returncode != 0:
+        raise AdbError(completed.stderr.strip() or "could not establish adb forward")
+    return completed.stdout.strip()
+
+
+def remove_forward(serial: str, local: str) -> None:
+    """Remove one host-to-device adb forward.
+
+    Args:
+        serial: Serial of the target device.
+        local: Host endpoint returned by :func:`forward`.
+
+    Raises:
+        AdbError: If adb cannot remove the forward.
+    """
+    completed = subprocess.run(  # noqa: S603 - fixed argv, no shell involved
+        [*build_adb_command(), "-s", serial, "forward", "--remove", local],
+        capture_output=True,
+        text=True,
+        timeout=DEFAULT_TIMEOUT_SECONDS,
+        check=False,
+    )
+    if completed.returncode != 0:
+        raise AdbError(completed.stderr.strip() or "could not remove adb forward")
+
+
 def push_file(serial: str, local_path: str, remote_path: str) -> None:
     """Copy a local file onto the device.
 

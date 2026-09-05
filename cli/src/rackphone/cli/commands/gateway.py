@@ -18,6 +18,7 @@ from rackphone.gateway.filters import FilterConfigError
 from rackphone.gateway.login import LoginService
 from rackphone.gateway.notify import NtfyError, NtfyForwarder
 from rackphone.gateway.presence import ClientPresence
+from rackphone.gateway.session import SessionManager
 from rackphone.gateway.store import EventStore
 
 
@@ -80,11 +81,17 @@ def run_gateway(args: argparse.Namespace) -> int:
     auth_store = AuthStore(config.database_path or None)
     forwarder = NtfyForwarder(config.ntfy) if config.ntfy.is_configured else None
     presence = ClientPresence()
+    sessions = SessionManager(clock=lambda: int(time.time()))
 
     login = LoginService(config, auth_store, _alert_callback(forwarder))
-    gateway = MessageGateway(
-        config, store, forwarder, presence, clock=lambda: int(time.time())
-    )
+
+    def gateway_clock() -> int:
+        """Read time and reap screen leases from the existing timed loop."""
+        now = int(time.time())
+        sessions.reap(now)
+        return now
+
+    gateway = MessageGateway(config, store, forwarder, presence, clock=gateway_clock)
 
     if forwarder is None:
         render.warn(
@@ -104,7 +111,7 @@ def run_gateway(args: argparse.Namespace) -> int:
             store.close()
 
     gateway.start_in_background()
-    app = create_app(config, store, login, gateway, presence)
+    app = create_app(config, store, login, gateway, presence, sessions)
     render.ok(f"API on http://{config.api_host}:{config.api_port}  (docs at /docs)")
     try:
         uvicorn.run(
