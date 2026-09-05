@@ -5,6 +5,8 @@
 poll_seconds = 5
 api_host = "127.0.0.1"
 api_port = 9106
+# X-Forwarded-For is accepted only from these directly connected proxies.
+trusted_proxies = ["127.0.0.1", "::1"]
 # api_token = "generate-a-long-random-string"
 # Two lifetimes, because "log in once" and "revoke now" are both wanted: the
 # refresh token is what a device keeps, the access token is what signs requests

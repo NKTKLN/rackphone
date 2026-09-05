@@ -9,9 +9,11 @@ import uvicorn
 from rackphone import render
 from rackphone.cli.context import EXIT_FAILURE, EXIT_OK
 from rackphone.gateway.api import create_app
+from rackphone.gateway.authstore import AuthStore
 from rackphone.gateway.config import GatewayConfig, get_config_path
 from rackphone.gateway.drain import MessageGateway
 from rackphone.gateway.filters import FilterConfigError
+from rackphone.gateway.login import LoginService
 from rackphone.gateway.notify import NtfyForwarder
 from rackphone.gateway.store import EventStore
 
@@ -49,6 +51,8 @@ def run_gateway(args: argparse.Namespace) -> int:
         config.api_port = args.port
 
     store = EventStore(config.database_path or None)
+    auth_store = AuthStore(config.database_path or None)
+    login = LoginService(config, auth_store)
     forwarder = NtfyForwarder(config.ntfy) if config.ntfy.is_configured else None
     gateway = MessageGateway(config, store, forwarder)
 
@@ -61,12 +65,30 @@ def run_gateway(args: argparse.Namespace) -> int:
         render.dim(f"  {len(config.filters)} filter rule(s) applied before pushing")
 
     if args.once:
-        return _drain_once(gateway)
+        try:
+            return _drain_once(gateway)
+        finally:
+            if forwarder is not None:
+                forwarder.close()
+            auth_store.close()
+            store.close()
 
     gateway.start_in_background()
-    app = create_app(config, store, gateway)
+    app = create_app(config, store, login, gateway)
     render.ok(f"API on http://{config.api_host}:{config.api_port}  (docs at /docs)")
-    uvicorn.run(app, host=config.api_host, port=config.api_port, log_level="warning")
+    try:
+        uvicorn.run(
+            app,
+            host=config.api_host,
+            port=config.api_port,
+            log_level="warning",
+        )
+    finally:
+        gateway.stop()
+        if forwarder is not None:
+            forwarder.close()
+        auth_store.close()
+        store.close()
     return EXIT_OK
 
 

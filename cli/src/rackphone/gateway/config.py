@@ -24,6 +24,7 @@ DEFAULT_API_HOST = "127.0.0.1"
 DEFAULT_API_PORT = 9106
 DEFAULT_ACCESS_TTL_SECONDS = 900
 DEFAULT_REFRESH_TTL_SECONDS = 2592000
+DEFAULT_TRUSTED_PROXIES = ["127.0.0.1", "::1"]
 DEFAULT_NTFY_TIMEOUT_SECONDS = 10.0
 DEFAULT_NTFY_RETRIES = 3
 DEFAULT_RETENTION = {"sms": 0, "call": 0, "notification": 30}
@@ -211,6 +212,7 @@ class GatewayConfig:
     api_host: str = DEFAULT_API_HOST
     api_port: int = DEFAULT_API_PORT
     api_token: str = ""
+    trusted_proxies: list[str] = field(default_factory=DEFAULT_TRUSTED_PROXIES.copy)
     access_ttl_seconds: int = DEFAULT_ACCESS_TTL_SECONDS
     refresh_ttl_seconds: int = DEFAULT_REFRESH_TTL_SECONDS
     database_path: str = ""
@@ -221,7 +223,7 @@ class GatewayConfig:
     filters: list[FilterRule] = field(default_factory=list)
 
     @classmethod
-    def load(cls, path: Path | None = None) -> GatewayConfig:
+    def load(cls, path: Path | None = None) -> GatewayConfig:  # noqa: C901
         """Read the configuration file, letting the environment override it.
 
         Args:
@@ -241,6 +243,17 @@ class GatewayConfig:
             data = tomllib.loads(config_path.read_text())
 
         gateway_section = data.get("gateway", {})
+        trusted_proxies_value = os.environ.get("RACKPHONE_TRUSTED_PROXIES")
+        if trusted_proxies_value is None:
+            trusted_proxies = list(
+                gateway_section.get("trusted_proxies", DEFAULT_TRUSTED_PROXIES)
+            )
+        else:
+            trusted_proxies = [
+                address.strip()
+                for address in trusted_proxies_value.split(",")
+                if address.strip()
+            ]
         retention = DEFAULT_RETENTION | data.get("retention", {})
         for kind, days in retention.items():
             # `days` comes straight out of TOML, so it can be a string or a
@@ -286,6 +299,7 @@ class GatewayConfig:
             api_token=os.environ.get(
                 "RACKPHONE_API_TOKEN", gateway_section.get("api_token", "")
             ),
+            trusted_proxies=trusted_proxies,
             access_ttl_seconds=int(
                 os.environ.get(
                     "RACKPHONE_ACCESS_TTL",
@@ -381,6 +395,7 @@ class GatewayConfig:
             "config": str(get_config_path()),
             "api": f"{self.api_host}:{self.api_port}",
             "api_token": mask_secret(self.api_token),
+            "trusted_proxies": ", ".join(self.trusted_proxies) or "none",
             "admin_username": self.admin.username or "unset",
             "admin_password_hash": mask_secret(self.admin.password_hash),
             "ntfy_url": self.ntfy.url or "unset",

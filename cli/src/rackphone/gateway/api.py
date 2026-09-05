@@ -1,28 +1,39 @@
-"""HTTP API over the event store.
+"""HTTP authentication and event-store API.
 
-Read-only for now. `POST /api/messages` is present and returns 501: the device
-can send - the companion app does - but the route that would drive it from here
-is not wired up, and the shape is settled so that wiring it does not also mean
-redesigning it.
+This module translates login policy and stored phone events into the public
+FastAPI contract, including scopes and per-unit capabilities.
 """
 
 from __future__ import annotations
 
 import asyncio
+import hmac
 import json
-from collections.abc import AsyncIterator
+import time
+from collections.abc import AsyncIterator, Callable, Iterable
+from dataclasses import asdict
 from http import HTTPStatus
+from ipaddress import ip_address
 from typing import Annotated, Any
 
-from fastapi import Depends, FastAPI, Header, HTTPException, Query
+from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request, Response
 from fastapi.responses import StreamingResponse
+from pydantic import BaseModel
 
-from rackphone import __version__
-from rackphone.gateway.config import GatewayConfig
+from rackphone import __version__, render
+from rackphone.gateway.auth import (
+    SCOPE_ADMIN,
+    SCOPE_CONTROL,
+    SCOPE_READ,
+    verify_password,
+)
+from rackphone.gateway.config import DEFAULT_TRUSTED_PROXIES, GatewayConfig
 from rackphone.gateway.drain import MessageGateway
+from rackphone.gateway.login import LoginService, RefusalReason, Tokens
 from rackphone.gateway.store import (
     DEFAULT_QUERY_LIMIT,
     KIND_CALL,
+    KIND_NOTIFICATION,
     KIND_SMS,
     MAX_QUERY_LIMIT,
     EventStore,
@@ -39,169 +50,393 @@ SEND_NOT_IMPLEMENTED = (
 )
 
 LimitQuery = Annotated[int, Query(ge=1, le=MAX_QUERY_LIMIT)]
+KNOWN_SCOPES = frozenset({SCOPE_READ, SCOPE_CONTROL, SCOPE_ADMIN})
 
 
-def create_app(
+class LoginBody(BaseModel):
+    """Credentials and device identity presented at login."""
+
+    username: str
+    password: str
+    device_label: str
+    totp_code: str | None = None
+    recovery_code: str | None = None
+    # Defaulting to control rather than admin: the app needs the screen and the
+    # send route, not the action log, and a device that asks for less is one
+    # less thing to regret when it is lost.
+    scope: str = SCOPE_CONTROL
+
+
+class RefreshBody(BaseModel):
+    """Refresh token presented for rotation or revocation."""
+
+    refresh_token: str
+
+
+class PasswordBody(BaseModel):
+    """Administrator password required for a sensitive change."""
+
+    password: str
+
+
+def client_ip(
+    peer: str, forwarded_for: str, trusted: Iterable[str] = DEFAULT_TRUSTED_PROXIES
+) -> str:
+    """Resolve the rate-limit address seen through a trusted proxy.
+
+    Args:
+        peer: Direct network peer address.
+        forwarded_for: Comma-separated forwarding chain, if supplied.
+        trusted: Addresses whose forwarding header is believed.
+
+    Returns:
+        str: The final forwarded hop for a trusted peer, otherwise the peer.
+    """
+    # Trusting the header from anyone lets a caller reset their own rate limit
+    # by inventing an address. Trusting nobody makes every request appear to
+    # come from the proxy, so the limiter locks out every client at once.
+    #
+    # The last hop, not the first: a proxy appends what it saw, so a caller who
+    # sends a header of their own pushes their invention leftwards and the real
+    # address is the one the proxy added.
+    if peer in set(trusted) and forwarded_for:
+        return forwarded_for.rsplit(",", maxsplit=1)[-1].strip() or peer
+    return peer
+
+
+def _is_loopback(host: str) -> bool:
+    if host == "localhost":
+        return True
+    try:
+        return ip_address(host).is_loopback
+    except ValueError:
+        return False
+
+
+def _capability_for(kind: str) -> str:
+    return "notifications" if kind == KIND_NOTIFICATION else "sms"
+
+
+def _tokens_body(tokens: Tokens) -> dict[str, str | int]:
+    return {
+        "refresh_token": tokens.refresh,
+        "access_token": tokens.access,
+        "scope": tokens.scope,
+        "refresh_expires_at": tokens.refresh_expires_at,
+        "access_expires_at": tokens.access_expires_at,
+    }
+
+
+def create_app(  # noqa: C901, PLR0915
     config: GatewayConfig,
     store: EventStore,
+    login: LoginService,
     gateway: MessageGateway | None = None,
 ) -> FastAPI:
     """Build the FastAPI application served by `rackphone gateway`.
 
     Args:
-        config: Resolved gateway configuration, including the API token.
+        config: Resolved gateway configuration.
         store: Event store to read from.
-        gateway: Running drain loop whose counters are exposed on /health.
+        login: Authentication policy service.
+        gateway: Running drain loop whose counters are exposed by the API.
 
     Returns:
-        The configured application.
+        FastAPI: The configured application.
     """
+    legacy_enabled = bool(config.api_token and _is_loopback(config.api_host))
+    if config.api_token and not legacy_enabled:
+        # Removing this outright would break the running compose deployment;
+        # honouring it on a public bind would leave a shared static secret
+        # beside the whole per-device authentication scheme.
+        render.warn("legacy gateway api_token ignored on a non-loopback bind")
+
     app = FastAPI(
         title="Rackphone",
         description="Incoming SMS and calls relayed from LineageOS server units.",
         version=__version__,
     )
 
-    def require_token(authorization: Annotated[str, Header()] = "") -> None:
-        """Reject requests without the configured bearer token.
+    def require_scope(scope: str) -> Callable[..., None]:
+        """Build a dependency enforcing one token scope.
 
         Args:
-            authorization: Value of the Authorization header.
-
-        Raises:
-            HTTPException: If a token is configured and does not match.
-        """
-        # No token configured means no auth. That is only safe because the API
-        # binds loopback by default; the check is here so that widening the
-        # bind and setting a token is all it takes to lock it down.
-        if not config.api_token:
-            return
-        if authorization != f"Bearer {config.api_token}":
-            raise HTTPException(
-                status_code=HTTPStatus.UNAUTHORIZED,
-                detail="invalid or missing bearer token",
-            )
-
-    authenticated = [Depends(require_token)]
-
-    @app.get("/health")
-    def read_health() -> dict[str, Any]:
-        """Report store contents and gateway counters.
+            scope: Minimum scope accepted by the route.
 
         Returns:
-            A health document that needs no authentication.
+            Callable[..., None]: FastAPI dependency that rejects bad tokens.
         """
+
+        def require(authorization: Annotated[str, Header()] = "") -> None:
+            prefix = "Bearer "
+            token = (
+                authorization.removeprefix(prefix)
+                if authorization.startswith(prefix)
+                else ""
+            )
+            if login.authorise(token, int(time.time()), scope) is not None:
+                return
+            if legacy_enabled and hmac.compare_digest(token, config.api_token):
+                return
+            raise HTTPException(
+                HTTPStatus.UNAUTHORIZED, "invalid or missing bearer token"
+            )
+
+        return require
+
+    read_auth = [Depends(require_scope(SCOPE_READ))]
+    control_auth = [Depends(require_scope(SCOPE_CONTROL))]
+    admin_auth = [Depends(require_scope(SCOPE_ADMIN))]
+
+    def permitted_rows(
+        kind: str | None,
+        unit: str | None,
+        since: int | None,
+        limit: int,
+    ) -> list[dict[str, Any]]:
+        """Read rows after applying one capability rule.
+
+        Args:
+            kind: Event kind requested, or None for a mixed feed.
+            unit: Unit requested, or None for every permitted unit.
+            since: Inclusive device timestamp lower bound.
+            limit: Maximum result count.
+
+        Returns:
+            list[dict[str, Any]]: Capability-filtered event rows.
+
+        Raises:
+            HTTPException: If a named unit lacks the required capability.
+        """
+        # With no kind asked for, the feed is mixed, so either capability is
+        # enough to see something: demanding `sms` here would refuse a unit that
+        # is allowed to report notifications and nothing else.
+        required = (
+            {_capability_for(kind)} if kind is not None else {"sms", "notifications"}
+        )
+        if unit is not None and not required & config.capabilities_for(unit):
+            raise HTTPException(HTTPStatus.FORBIDDEN, "unit capability denied")
+        rows = store.query_events(kind=kind, unit=unit, since=since, limit=limit)
+        return [
+            row
+            for row in rows
+            if _capability_for(row["kind"]) in config.capabilities_for(row["unit"])
+        ]
+
+    @app.get("/health")
+    def read_health() -> dict[str, str]:
+        """Report non-sensitive process health."""
+        # An unauthenticated endpoint behind a public proxy should not report
+        # how many messages arrived.
         return {
             "status": "ok",
+            "version": __version__,
+            "ntfy": "enabled" if config.ntfy.is_configured else "disabled",
+            "totp": "enabled" if login.store.totp_secret() else "disabled",
+        }
+
+    @app.get("/api/stats", dependencies=read_auth)
+    def read_stats() -> dict[str, Any]:
+        """Report store and drain counters to an authorised reader."""
+        return {
             "events": store.count_by_kind(),
-            "ntfy": "configured" if config.ntfy.is_configured else "unset",
             "gateway": gateway.stats.as_dict() if gateway else None,
         }
 
-    @app.get("/api/events", dependencies=authenticated)
+    @app.post("/api/login")
+    def log_in(body: LoginBody, request: Request) -> dict[str, str | int]:
+        """Authenticate credentials and return a token pair."""
+        if body.scope not in KNOWN_SCOPES:
+            raise HTTPException(HTTPStatus.BAD_REQUEST, f"unknown scope {body.scope!r}")
+        peer = request.client.host if request.client else ""
+        outcome = login.log_in(
+            body.username,
+            body.password,
+            client_ip(
+                peer,
+                request.headers.get("x-forwarded-for", ""),
+                config.trusted_proxies,
+            ),
+            body.device_label,
+            int(time.time()),
+            body.totp_code,
+            body.recovery_code,
+            body.scope,
+        )
+        if outcome.tokens is not None:
+            return _tokens_body(outcome.tokens)
+        if outcome.reason is None:
+            raise RuntimeError("login outcome has neither tokens nor refusal reason")
+        status = {
+            RefusalReason.BAD_CREDENTIALS: HTTPStatus.UNAUTHORIZED,
+            RefusalReason.TOTP_REQUIRED: HTTPStatus.FORBIDDEN,
+            RefusalReason.BAD_TOTP: HTTPStatus.FORBIDDEN,
+            RefusalReason.LOCKED: HTTPStatus.LOCKED,
+            RefusalReason.NOT_CONFIGURED: HTTPStatus.SERVICE_UNAVAILABLE,
+        }[outcome.reason]
+        headers = None
+        if outcome.reason == RefusalReason.LOCKED:
+            seconds = max(0, (outcome.locked_until or 0) - int(time.time()))
+            headers = {"Retry-After": str(seconds)}
+        raise HTTPException(status, detail=outcome.reason, headers=headers)
+
+    @app.post("/api/refresh")
+    def refresh(body: RefreshBody) -> dict[str, str | int]:
+        """Rotate a live refresh token."""
+        outcome = login.refresh(body.refresh_token, int(time.time()))
+        if outcome.tokens is None:
+            raise HTTPException(HTTPStatus.UNAUTHORIZED, "invalid refresh token")
+        return _tokens_body(outcome.tokens)
+
+    @app.post("/api/logout", status_code=HTTPStatus.NO_CONTENT)
+    def log_out(body: RefreshBody) -> None:
+        """Revoke a refresh token without revealing its prior state."""
+        login.log_out(body.refresh_token, int(time.time()))
+
+    @app.get("/api/sessions", dependencies=admin_auth)
+    def read_sessions() -> list[dict[str, Any]]:
+        """List refresh-token sessions."""
+        return [asdict(session) for session in login.store.list_refresh()]
+
+    @app.delete("/api/sessions/{token_id}", dependencies=admin_auth)
+    def revoke_session(token_id: int) -> dict[str, bool]:
+        """Revoke one refresh-token session."""
+        return {"revoked": login.store.revoke_refresh(token_id, int(time.time()))}
+
+    @app.post("/api/sessions/revoke-all", dependencies=admin_auth)
+    def revoke_all_sessions() -> dict[str, int]:
+        """Revoke every live refresh-token session."""
+        return {"revoked": login.log_out_everywhere(int(time.time()))}
+
+    @app.get("/api/audit", dependencies=admin_auth)
+    def read_audit(
+        since: int | None = None,
+        limit: LimitQuery = DEFAULT_QUERY_LIMIT,
+    ) -> list[dict[str, Any]]:
+        """List permanent authentication audit events."""
+        return login.store.query_audit(since=since, limit=limit)
+
+    def require_password(password: str) -> None:
+        if not verify_password(password, config.admin.password_hash):
+            raise HTTPException(HTTPStatus.UNAUTHORIZED, "invalid password")
+
+    @app.post("/api/totp", dependencies=admin_auth)
+    def enable_totp(body: PasswordBody) -> dict[str, str | list[str]]:
+        """Enable TOTP after re-verifying the administrator password."""
+        require_password(body.password)
+        secret, recovery_codes = login.enable_totp(int(time.time()))
+        return {"secret": secret, "recovery_codes": recovery_codes}
+
+    @app.delete("/api/totp", dependencies=admin_auth)
+    def disable_totp(body: PasswordBody) -> Response:
+        """Disable TOTP after re-verifying the administrator password."""
+        require_password(body.password)
+        login.disable_totp(int(time.time()))
+        return Response(status_code=HTTPStatus.NO_CONTENT)
+
+    @app.get("/api/events", dependencies=read_auth)
     def read_events(
         kind: str | None = None,
         unit: str | None = None,
         since: int | None = None,
         limit: LimitQuery = DEFAULT_QUERY_LIMIT,
     ) -> list[dict[str, Any]]:
-        """List stored events of every kind.
+        """List stored events allowed by unit capabilities.
 
         Args:
             kind: Restrict to one event kind.
-            unit: Restrict to one unit.
+            unit: Restrict to one unit; refused when it lacks the capability.
             since: Only events at or after this device timestamp.
             limit: Maximum number of rows to return.
 
         Returns:
-            The matching events, newest first.
+            list[dict[str, Any]]: The permitted events, newest first.
         """
-        return store.query_events(kind=kind, unit=unit, since=since, limit=limit)
+        return permitted_rows(kind, unit, since, limit)
 
-    @app.get("/api/messages", dependencies=authenticated)
+    @app.get("/api/messages", dependencies=read_auth)
     def read_messages(
         unit: str | None = None,
         since: int | None = None,
         limit: LimitQuery = DEFAULT_QUERY_LIMIT,
     ) -> list[dict[str, Any]]:
-        """List received SMS.
+        """List capability-filtered received SMS.
 
         Args:
-            unit: Restrict to one unit.
-            since: Only messages at or after this device timestamp.
+            unit: Restrict to one unit; refused when it lacks the capability.
+            since: Only events at or after this device timestamp.
             limit: Maximum number of rows to return.
 
         Returns:
-            The matching messages, newest first.
+            list[dict[str, Any]]: The permitted messages, newest first.
         """
-        return store.query_events(kind=KIND_SMS, unit=unit, since=since, limit=limit)
+        return permitted_rows(KIND_SMS, unit, since, limit)
 
-    @app.get("/api/calls", dependencies=authenticated)
+    @app.get("/api/calls", dependencies=read_auth)
     def read_calls(
         unit: str | None = None,
         since: int | None = None,
         limit: LimitQuery = DEFAULT_QUERY_LIMIT,
     ) -> list[dict[str, Any]]:
-        """List received calls.
+        """List capability-filtered received calls.
 
         Args:
-            unit: Restrict to one unit.
-            since: Only calls at or after this device timestamp.
+            unit: Restrict to one unit; refused when it lacks the capability.
+            since: Only events at or after this device timestamp.
             limit: Maximum number of rows to return.
 
         Returns:
-            The matching calls, newest first.
+            list[dict[str, Any]]: The permitted calls, newest first.
         """
-        return store.query_events(kind=KIND_CALL, unit=unit, since=since, limit=limit)
+        return permitted_rows(KIND_CALL, unit, since, limit)
 
     @app.post(
         "/api/messages",
         status_code=HTTPStatus.NOT_IMPLEMENTED,
-        dependencies=authenticated,
+        dependencies=control_auth,
     )
     def send_message() -> dict[str, str]:
-        """Reserve the send route until a device path exists.
+        """Reserve the authenticated send route until its path exists."""
+        raise HTTPException(HTTPStatus.NOT_IMPLEMENTED, SEND_NOT_IMPLEMENTED)
 
-        Returns:
-            Never returns.
-
-        Raises:
-            HTTPException: Always, explaining why sending is unavailable.
-        """
-        raise HTTPException(
-            status_code=HTTPStatus.NOT_IMPLEMENTED, detail=SEND_NOT_IMPLEMENTED
-        )
-
-    @app.get("/api/stream", dependencies=authenticated)
+    @app.get("/api/stream", dependencies=read_auth)
     async def stream_events() -> StreamingResponse:
-        """Stream events stored after the connection opens.
-
-        Returns:
-            A server-sent event stream.
-        """
+        """Stream events stored after the connection opens."""
         return StreamingResponse(
-            iter_new_events(store, store.latest_event_id()),
+            iter_new_events(store, store.latest_event_id(), config),
             media_type="text/event-stream",
         )
 
     return app
 
 
-async def iter_new_events(store: EventStore, last_seen_id: int) -> AsyncIterator[str]:
-    """Yield every stored row above a starting id, oldest first, forever.
+async def iter_new_events(
+    store: EventStore,
+    last_seen_id: int,
+    config: GatewayConfig | None = None,
+) -> AsyncIterator[str]:
+    """Yield permitted stored rows above a starting id, oldest first.
 
     Args:
         store: Event store to follow.
         last_seen_id: Highest row id the client has already seen.
+        config: Capability policy, or None to permit every unit.
 
     Yields:
-        One server-sent `data:` frame per stored event.
+        str: One server-sent `data:` frame per stored event.
     """
     while True:
         rows = [
             row
             for row in store.query_events(limit=STREAM_BATCH_SIZE)
             if row["id"] > last_seen_id
+            and (
+                config is None
+                or (
+                    ("notifications" if row["kind"] == "notification" else "sms")
+                    in config.capabilities_for(row["unit"])
+                )
+            )
         ]
         for row in reversed(rows):
             last_seen_id = max(last_seen_id, row["id"])

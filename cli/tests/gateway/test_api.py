@@ -9,18 +9,26 @@ from __future__ import annotations
 import asyncio
 import json
 from collections.abc import Iterator
+from pathlib import Path
 
 import pytest
 from conftest import EventFactory
 from fastapi.testclient import TestClient
 
-from rackphone.gateway.api import create_app, iter_new_events
-from rackphone.gateway.config import GatewayConfig, NtfyConfig
+from rackphone.gateway import api
+from rackphone.gateway.api import client_ip, create_app, iter_new_events
+from rackphone.gateway.auth import SCOPE_CONTROL, SCOPE_READ, hash_password
+from rackphone.gateway.authstore import AuthStore
+from rackphone.gateway.config import AdminConfig, GatewayConfig, NtfyConfig
 from rackphone.gateway.drain import MessageGateway
+from rackphone.gateway.login import LoginService
 from rackphone.gateway.store import EventStore
 
 HTTP_OK = 200
 HTTP_UNAUTHORIZED = 401
+HTTP_FORBIDDEN = 403
+HTTP_LOCKED = 423
+HTTP_BAD_REQUEST = 400
 HTTP_NOT_IMPLEMENTED = 501
 
 
@@ -37,26 +45,37 @@ def populated_store(store: EventStore, make_event: EventFactory) -> EventStore:
 
 
 @pytest.fixture
-def client(populated_store: EventStore) -> Iterator[TestClient]:
-    """Serve the API without a token, the way a loopback bind runs."""
-    with TestClient(create_app(GatewayConfig(), populated_store)) as test_client:
+def client(populated_store: EventStore, tmp_path: Path) -> Iterator[TestClient]:
+    """Serve the API with the loopback compatibility token."""
+    config = GatewayConfig(api_token="legacy")
+    auth_store = AuthStore(tmp_path / "auth.db")
+    with TestClient(
+        create_app(config, populated_store, LoginService(config, auth_store))
+    ) as test_client:
+        test_client.headers["Authorization"] = "Bearer legacy"
         yield test_client
+    auth_store.close()
 
 
 class TestHealth:
     def test_reports_counts_without_a_token(self, client: TestClient) -> None:
         body = client.get("/health").json()
         assert body["status"] == "ok"
-        assert body["events"] == {"sms": 1, "call": 1}
-        assert body["ntfy"] == "unset"
+        assert "events" not in body
+        assert body["ntfy"] == "disabled"
 
-    def test_reports_ntfy_and_gateway_state(self, populated_store: EventStore) -> None:
+    def test_reports_ntfy_and_gateway_state(
+        self, populated_store: EventStore, tmp_path: Path
+    ) -> None:
         config = GatewayConfig(ntfy=NtfyConfig(url="https://n.example", topic="t"))
         gateway = MessageGateway(config, populated_store)
-        with TestClient(create_app(config, populated_store, gateway)) as client:
+        auth_store = AuthStore(tmp_path / "auth.db")
+        login = LoginService(config, auth_store)
+        with TestClient(create_app(config, populated_store, login, gateway)) as client:
             body = client.get("/health").json()
-        assert body["ntfy"] == "configured"
-        assert body["gateway"]["drained"] == 0
+        assert body["ntfy"] == "enabled"
+        assert "gateway" not in body
+        auth_store.close()
 
 
 class TestQueries:
@@ -92,21 +111,303 @@ class TestSending:
 
 
 class TestAuth:
-    def test_a_configured_token_is_required(self, populated_store: EventStore) -> None:
+    def test_a_configured_token_is_required(
+        self, populated_store: EventStore, tmp_path: Path
+    ) -> None:
         config = GatewayConfig(api_token="s3cret")
-        with TestClient(create_app(config, populated_store)) as client:
+        auth_store = AuthStore(tmp_path / "auth.db")
+        with TestClient(
+            create_app(config, populated_store, LoginService(config, auth_store))
+        ) as client:
             assert client.get("/api/events").status_code == HTTP_UNAUTHORIZED
             authorised = client.get(
                 "/api/events", headers={"Authorization": "Bearer s3cret"}
             )
             assert authorised.status_code == HTTP_OK
+        auth_store.close()
 
-    def test_health_stays_open_so_a_probe_still_works(
-        self, populated_store: EventStore
+    def test_login_returns_a_usable_access_token(
+        self, populated_store: EventStore, tmp_path: Path
     ) -> None:
-        config = GatewayConfig(api_token="s3cret")
-        with TestClient(create_app(config, populated_store)) as client:
-            assert client.get("/health").status_code == HTTP_OK
+        config = GatewayConfig(
+            admin=AdminConfig("admin", hash_password("correct horse"))
+        )
+        auth_store = AuthStore(tmp_path / "auth.db")
+        with TestClient(
+            create_app(config, populated_store, LoginService(config, auth_store))
+        ) as client:
+            response = client.post(
+                "/api/login",
+                json={
+                    "username": "admin",
+                    "password": "correct horse",
+                    "device_label": "test phone",
+                },
+            )
+            token = response.json()["access_token"]
+            events = client.get(
+                "/api/events", headers={"Authorization": f"Bearer {token}"}
+            )
+        assert response.status_code == HTTP_OK
+        assert events.status_code == HTTP_OK
+        auth_store.close()
+
+    def test_login_defaults_to_control_and_refuses_an_unknown_scope(
+        self, populated_store: EventStore, tmp_path: Path
+    ) -> None:
+        # Handing every login the admin scope would make scopes decorative: a
+        # phone that only reads messages would carry the key to the action log.
+        config = GatewayConfig(admin=AdminConfig("admin", hash_password("right")))
+        auth_store = AuthStore(tmp_path / "auth.db")
+        credentials = {
+            "username": "admin",
+            "password": "right",
+            "device_label": "test phone",
+        }
+        with TestClient(
+            create_app(config, populated_store, LoginService(config, auth_store))
+        ) as client:
+            granted = client.post("/api/login", json=credentials).json()
+            audit = client.get(
+                "/api/audit",
+                headers={"Authorization": f"Bearer {granted['access_token']}"},
+            )
+            unknown = client.post("/api/login", json=credentials | {"scope": "root"})
+        assert granted["scope"] == SCOPE_CONTROL
+        assert audit.status_code == HTTP_UNAUTHORIZED
+        assert unknown.status_code == HTTP_BAD_REQUEST
+        auth_store.close()
+
+    def test_wrong_password_does_not_identify_the_bad_field(
+        self, populated_store: EventStore, tmp_path: Path
+    ) -> None:
+        config = GatewayConfig(admin=AdminConfig("admin", hash_password("right")))
+        auth_store = AuthStore(tmp_path / "auth.db")
+        with TestClient(
+            create_app(config, populated_store, LoginService(config, auth_store))
+        ) as client:
+            response = client.post(
+                "/api/login",
+                json={
+                    "username": "admin",
+                    "password": "wrong",
+                    "device_label": "phone",
+                },
+            )
+        assert response.status_code == HTTP_UNAUTHORIZED
+        assert response.json() == {"detail": "bad_credentials"}
+        auth_store.close()
+
+    def test_lockout_has_a_positive_retry_after(
+        self,
+        populated_store: EventStore,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.setattr(api.time, "time", lambda: 1000)
+        config = GatewayConfig(admin=AdminConfig("admin", hash_password("right")))
+        auth_store = AuthStore(tmp_path / "auth.db")
+        body = {"username": "admin", "password": "wrong", "device_label": "phone"}
+        with TestClient(
+            create_app(config, populated_store, LoginService(config, auth_store))
+        ) as client:
+            for _ in range(3):
+                client.post("/api/login", json=body)
+            response = client.post("/api/login", json=body)
+        assert response.status_code == HTTP_LOCKED
+        assert int(response.headers["Retry-After"]) > 0
+        auth_store.close()
+
+    @pytest.mark.parametrize(
+        "authorization",
+        [None, "not bearer", "Bearer malformed"],
+    )
+    def test_read_route_refuses_bad_tokens(
+        self,
+        populated_store: EventStore,
+        tmp_path: Path,
+        authorization: str | None,
+    ) -> None:
+        config = GatewayConfig()
+        auth_store = AuthStore(tmp_path / "auth.db")
+        headers = {} if authorization is None else {"Authorization": authorization}
+        with TestClient(
+            create_app(config, populated_store, LoginService(config, auth_store))
+        ) as client:
+            assert client.get("/api/events", headers=headers).status_code == 401
+        auth_store.close()
+
+    def test_expired_token_is_refused(
+        self,
+        populated_store: EventStore,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        config = GatewayConfig(
+            access_ttl_seconds=1,
+            admin=AdminConfig("admin", hash_password("right")),
+        )
+        auth_store = AuthStore(tmp_path / "auth.db")
+        login = LoginService(config, auth_store)
+        outcome = login.log_in("admin", "right", "peer", "phone", 1000)
+        assert outcome.tokens is not None
+        monkeypatch.setattr(api.time, "time", lambda: 1002)
+        with TestClient(create_app(config, populated_store, login)) as client:
+            response = client.get(
+                "/api/events",
+                headers={"Authorization": f"Bearer {outcome.tokens.access}"},
+            )
+        assert response.status_code == HTTP_UNAUTHORIZED
+        auth_store.close()
+
+    def test_read_scope_cannot_send(
+        self, populated_store: EventStore, tmp_path: Path
+    ) -> None:
+        config = GatewayConfig(admin=AdminConfig("admin", hash_password("right")))
+        auth_store = AuthStore(tmp_path / "auth.db")
+        login = LoginService(config, auth_store)
+        outcome = login.log_in(
+            "admin", "right", "peer", "phone", 1000, scope=SCOPE_READ
+        )
+        assert outcome.tokens is not None
+        with TestClient(create_app(config, populated_store, login)) as client:
+            response = client.post(
+                "/api/messages",
+                headers={"Authorization": f"Bearer {outcome.tokens.access}"},
+            )
+        assert response.status_code == HTTP_UNAUTHORIZED
+        auth_store.close()
+
+    def test_stats_requires_a_token(
+        self, populated_store: EventStore, tmp_path: Path
+    ) -> None:
+        config = GatewayConfig()
+        auth_store = AuthStore(tmp_path / "auth.db")
+        with TestClient(
+            create_app(config, populated_store, LoginService(config, auth_store))
+        ) as client:
+            assert client.get("/api/stats").status_code == HTTP_UNAUTHORIZED
+        auth_store.close()
+
+    def test_totp_requires_the_administrator_password(
+        self, populated_store: EventStore, tmp_path: Path
+    ) -> None:
+        config = GatewayConfig(
+            api_token="legacy",
+            admin=AdminConfig("admin", hash_password("right")),
+        )
+        auth_store = AuthStore(tmp_path / "auth.db")
+        with TestClient(
+            create_app(config, populated_store, LoginService(config, auth_store))
+        ) as client:
+            response = client.post(
+                "/api/totp",
+                json={"password": "wrong"},
+                headers={"Authorization": "Bearer legacy"},
+            )
+        assert response.status_code == HTTP_UNAUTHORIZED
+        auth_store.close()
+
+
+class TestCapabilities:
+    def test_named_unit_is_refused_or_allowed_by_capability(
+        self, populated_store: EventStore, tmp_path: Path
+    ) -> None:
+        config = GatewayConfig(
+            api_token="legacy",
+            unit_capabilities={
+                "lisa01": frozenset({"screen"}),
+                "lisa02": frozenset({"sms", "screen"}),
+            },
+        )
+        auth_store = AuthStore(tmp_path / "auth.db")
+        with TestClient(
+            create_app(config, populated_store, LoginService(config, auth_store))
+        ) as client:
+            denied = client.get(
+                "/api/messages",
+                params={"unit": "lisa01"},
+                headers={"Authorization": "Bearer legacy"},
+            )
+            allowed = client.get(
+                "/api/calls",
+                params={"unit": "lisa02"},
+                headers={"Authorization": "Bearer legacy"},
+            )
+        assert denied.status_code == HTTP_FORBIDDEN
+        assert allowed.status_code == HTTP_OK
+        auth_store.close()
+
+    def test_mixed_feed_filters_units_without_capability(
+        self, populated_store: EventStore, tmp_path: Path
+    ) -> None:
+        config = GatewayConfig(
+            api_token="legacy",
+            unit_capabilities={
+                "lisa01": frozenset({"screen"}),
+                "lisa02": frozenset({"sms"}),
+            },
+        )
+        auth_store = AuthStore(tmp_path / "auth.db")
+        with TestClient(
+            create_app(config, populated_store, LoginService(config, auth_store))
+        ) as client:
+            rows = client.get(
+                "/api/events", headers={"Authorization": "Bearer legacy"}
+            ).json()
+        assert {row["unit"] for row in rows} == {"lisa02"}
+        auth_store.close()
+
+
+def test_client_ip_uses_only_a_trusted_peer() -> None:
+    trusted = ["proxy"]
+    # The proxy appends what it saw, so an address the caller invented ends up
+    # to the left of the real one.
+    assert client_ip("proxy", "198.51.100.1, 192.0.2.1", trusted) == "192.0.2.1"
+    assert client_ip("stranger", "192.0.2.1", trusted) == "stranger"
+    assert client_ip("proxy", "", trusted) == "proxy"
+
+
+def test_a_unit_that_may_only_report_notifications_keeps_its_feed(
+    populated_store: EventStore, tmp_path: Path
+) -> None:
+    # A mixed feed needs either capability. Demanding `sms` here refused a unit
+    # its own notifications, which is the whole point of granting the narrower
+    # capability in the first place.
+    config = GatewayConfig(
+        api_token="legacy",
+        unit_capabilities={"lisa01": frozenset({"notifications"})},
+    )
+    auth_store = AuthStore(tmp_path / "auth.db")
+    with TestClient(
+        create_app(config, populated_store, LoginService(config, auth_store))
+    ) as client:
+        mixed = client.get(
+            "/api/events",
+            params={"unit": "lisa01"},
+            headers={"Authorization": "Bearer legacy"},
+        )
+        narrowed = client.get(
+            "/api/messages",
+            params={"unit": "lisa01"},
+            headers={"Authorization": "Bearer legacy"},
+        )
+    assert mixed.status_code == HTTP_OK
+    # Asking specifically for SMS is still refused: the capability was not given.
+    assert narrowed.status_code == HTTP_FORBIDDEN
+    auth_store.close()
+
+
+def test_health_stays_open_so_a_probe_still_works(
+    populated_store: EventStore, tmp_path: Path
+) -> None:
+    config = GatewayConfig(api_token="s3cret")
+    auth_store = AuthStore(tmp_path / "auth.db")
+    with TestClient(
+        create_app(config, populated_store, LoginService(config, auth_store))
+    ) as client:
+        assert client.get("/health").status_code == HTTP_OK
+    auth_store.close()
 
 
 class TestStream:

@@ -52,6 +52,21 @@ class TestLoading:
         assert config.poll_seconds == 30
         assert config.api_port == 9200
 
+    def test_trusted_proxies_are_read_and_overridden(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        config_file = tmp_path / "gateway.toml"
+        config_file.write_text('[gateway]\ntrusted_proxies=["10.0.0.1", "10.0.0.2"]\n')
+        assert GatewayConfig.load(config_file).trusted_proxies == [
+            "10.0.0.1",
+            "10.0.0.2",
+        ]
+        monkeypatch.setenv("RACKPHONE_TRUSTED_PROXIES", "192.0.2.1, 192.0.2.2")
+        assert GatewayConfig.load(config_file).trusted_proxies == [
+            "192.0.2.1",
+            "192.0.2.2",
+        ]
+
     def test_admin_is_read_from_file_and_environment(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:

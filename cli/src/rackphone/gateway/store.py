@@ -48,6 +48,7 @@ MAX_QUERY_LIMIT = 1000
 
 KIND_SMS = "sms"
 KIND_CALL = "call"
+KIND_NOTIFICATION = "notification"
 
 
 def default_database_path() -> Path:
