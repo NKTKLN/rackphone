@@ -38,6 +38,7 @@ from rackphone.gateway.store import (
     MAX_QUERY_LIMIT,
     EventStore,
 )
+from rackphone.metrics.exposition import collect_unit_metrics, parse_samples
 
 STREAM_POLL_SECONDS = 2.0
 STREAM_BATCH_SIZE = 100
@@ -257,9 +258,40 @@ def create_app(  # noqa: C901, PLR0915
     @app.get("/api/stats", dependencies=read_auth)
     def read_stats() -> dict[str, Any]:
         """Report store and drain counters to an authorised reader."""
+        # This deliberately is not /api/audit: the first client page uses a
+        # control token, and requiring admin to learn whether a login failed
+        # would push every device toward the scope that can read full details.
         return {
             "events": store.count_by_kind(),
             "gateway": gateway.stats.as_dict() if gateway else None,
+            "security": login.store.security_summary(int(time.time())),
+        }
+
+    @app.get("/api/units/{unit}/telemetry", dependencies=read_auth)
+    def read_telemetry(unit: str) -> dict[str, Any]:
+        """Collect current summary telemetry for one unit.
+
+        Args:
+            unit: Name of the configured unit to scrape.
+
+        Returns:
+            dict[str, Any]: Availability, collection time, and current samples.
+        """
+        target = next(
+            (item for item in units.load_all_units() if item.name == unit), None
+        )
+        if target is None:
+            raise HTTPException(HTTPStatus.NOT_FOUND, "unknown unit")
+        if not {"sms", "notifications"} & config.capabilities_for(unit):
+            raise HTTPException(HTTPStatus.FORBIDDEN, "unit capability denied")
+        # USB collection takes real time; clients should ask on demand, not on
+        # a timer.
+        is_up, exposition = collect_unit_metrics(target)
+        return {
+            "unit": unit,
+            "up": is_up,
+            "collected_at": int(time.time()),
+            "samples": parse_samples(exposition) if is_up else {},
         }
 
     @app.post("/api/login")

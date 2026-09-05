@@ -30,6 +30,7 @@ HTTP_FORBIDDEN = 403
 HTTP_LOCKED = 423
 HTTP_BAD_REQUEST = 400
 HTTP_NOT_IMPLEMENTED = 501
+HTTP_NOT_FOUND = 404
 
 
 @pytest.fixture
@@ -383,6 +384,86 @@ def test_units_are_listed_with_their_capabilities(
     assert rows[0]["capabilities"] == ["files", "notifications", "screen", "sms"]
     assert rows[1]["capabilities"] == ["sms"]
     auth_store.close()
+
+
+class TestTelemetry:
+    def test_collects_a_known_unit(
+        self,
+        populated_store: EventStore,
+        tmp_path: Path,
+        repo: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        (repo / "units" / "lisa01.env").write_text("unit.serial=AAA\n")
+        monkeypatch.setattr(
+            api,
+            "collect_unit_metrics",
+            lambda _unit: (True, "rackphone_battery_capacity_percent 81\n"),
+        )
+        monkeypatch.setattr(api.time, "time", lambda: 1234)
+        config = GatewayConfig(api_token="legacy")
+        auth_store = AuthStore(tmp_path / "auth.db")
+        with TestClient(
+            create_app(config, populated_store, LoginService(config, auth_store))
+        ) as client:
+            response = client.get(
+                "/api/units/lisa01/telemetry",
+                headers={"Authorization": "Bearer legacy"},
+            )
+        assert response.json() == {
+            "unit": "lisa01",
+            "up": True,
+            "collected_at": 1234,
+            "samples": {"rackphone_battery_capacity_percent": 81.0},
+        }
+        auth_store.close()
+
+    def test_rejects_unknown_and_incapable_units(
+        self, populated_store: EventStore, tmp_path: Path, repo: Path
+    ) -> None:
+        (repo / "units" / "screen-only.env").write_text("")
+        config = GatewayConfig(
+            api_token="legacy",
+            unit_capabilities={"screen-only": frozenset({"screen"})},
+        )
+        auth_store = AuthStore(tmp_path / "auth.db")
+        with TestClient(
+            create_app(config, populated_store, LoginService(config, auth_store))
+        ) as client:
+            unknown = client.get(
+                "/api/units/missing/telemetry",
+                headers={"Authorization": "Bearer legacy"},
+            )
+            denied = client.get(
+                "/api/units/screen-only/telemetry",
+                headers={"Authorization": "Bearer legacy"},
+            )
+        assert unknown.status_code == HTTP_NOT_FOUND
+        assert denied.status_code == HTTP_FORBIDDEN
+        auth_store.close()
+
+    def test_unreachable_unit_is_a_successful_empty_answer(
+        self,
+        populated_store: EventStore,
+        tmp_path: Path,
+        repo: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        (repo / "units" / "lisa01.env").write_text("")
+        monkeypatch.setattr(api, "collect_unit_metrics", lambda _unit: (False, ""))
+        config = GatewayConfig(api_token="legacy")
+        auth_store = AuthStore(tmp_path / "auth.db")
+        with TestClient(
+            create_app(config, populated_store, LoginService(config, auth_store))
+        ) as client:
+            response = client.get(
+                "/api/units/lisa01/telemetry",
+                headers={"Authorization": "Bearer legacy"},
+            )
+        assert response.status_code == HTTP_OK
+        assert response.json()["up"] is False
+        assert response.json()["samples"] == {}
+        auth_store.close()
 
 
 def test_client_ip_uses_only_a_trusted_peer() -> None:

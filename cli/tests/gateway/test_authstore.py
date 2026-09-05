@@ -115,6 +115,29 @@ def test_failures_since_filters_window_outcome_and_subject(
     assert auth_store.failures_since(10, username="admin") == 2
 
 
+def test_security_summary_is_windowed_and_does_not_leak_identity(
+    auth_store: AuthStore,
+) -> None:
+    auth_store.record_attempt("192.0.2.1", "secret-user", False, 13_599)
+    auth_store.record_attempt("192.0.2.2", "secret-user", False, 13_600)
+    auth_store.record_attempt("192.0.2.3", "secret-user", True, 99_000)
+    auth_store.record_audit(99_000, "login", actor="secret-user", subject="tablet")
+    auth_store.lock(Lockout("account:secret-user", 1, 101_000))
+    auth_store.enable_totp("secret", [])
+
+    summary = auth_store.security_summary(100_000)
+
+    assert summary == {
+        "last_login_at": 99_000,
+        "last_login_device": "tablet",
+        "failed_logins_24h": 1,
+        "locked_until": 101_000,
+        "totp": "enabled",
+    }
+    assert "secret-user" not in repr(summary)
+    assert "192.0.2" not in repr(summary)
+
+
 @pytest.mark.parametrize(("ip", "username"), [(None, None), ("1.1.1.1", "admin")])
 def test_failures_since_requires_exactly_one_subject(
     auth_store: AuthStore, ip: str | None, username: str | None
@@ -173,3 +196,21 @@ def test_access_key_is_adopted_rather_than_overwritten(tmp_path: Path) -> None:
     assert first.access_key() == second.access_key()
     first.close()
     second.close()
+
+
+def test_security_summary_ignores_a_strangers_ip_lock(auth_store: AuthStore) -> None:
+    # Someone else guessing from their own address must not read as "you are
+    # locked out".
+    auth_store.lock(Lockout("ip:198.51.100.7", 1, 9_000))
+    assert auth_store.security_summary(1_000)["locked_until"] is None
+
+    auth_store.lock(Lockout("account:admin", 1, 9_000))
+    assert auth_store.security_summary(1_000)["locked_until"] == 9_000
+
+
+def test_security_summary_carries_no_identifiers(auth_store: AuthStore) -> None:
+    auth_store.record_attempt("198.51.100.7", "admin", False, 1_000)
+    summary = auth_store.security_summary(1_000)
+    assert "198.51.100.7" not in repr(summary)
+    assert "admin" not in repr(summary)
+    assert summary["failed_logins_24h"] == 1

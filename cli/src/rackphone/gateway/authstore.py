@@ -406,6 +406,39 @@ class AuthStore:
                 (now, ip, username, int(ok)),
             )
 
+    def security_summary(self, now: int) -> dict[str, Any]:
+        """Return non-sensitive authentication health indicators.
+
+        Args:
+            now: Current Unix timestamp in seconds.
+
+        Returns:
+            dict[str, Any]: Login, lockout, and TOTP summary values.
+        """
+        login = self.connection.execute(
+            "SELECT at, subject AS device FROM audit "
+            "WHERE action = 'login' ORDER BY at DESC, id DESC LIMIT 1"
+        ).fetchone()
+        failures = self.connection.execute(
+            "SELECT COUNT(*) AS total FROM login_attempts WHERE ok = 0 AND at >= ?",
+            (now - 86_400,),
+        ).fetchone()
+        # Account locks only. An IP lock belongs to whoever was guessing, and
+        # reporting theirs here would tell the operator they are locked out
+        # when nothing of theirs is locked at all.
+        lock = self.connection.execute(
+            "SELECT MAX(until) AS until_at FROM lockouts "
+            "WHERE subject LIKE 'account:%' AND until > ?",
+            (now,),
+        ).fetchone()
+        return {
+            "last_login_at": None if login is None else int(login["at"]),
+            "last_login_device": None if login is None else login["device"],
+            "failed_logins_24h": int(failures["total"]),
+            "locked_until": None if lock["until_at"] is None else int(lock["until_at"]),
+            "totp": "enabled" if self.totp_secret() else "disabled",
+        }
+
     def failures_since(
         self,
         since: int,
