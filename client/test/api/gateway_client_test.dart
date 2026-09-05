@@ -229,6 +229,44 @@ void main() {
     expect(events.single.body, 'hello');
   });
 
+  test('telemetry reads its unit route and parses samples', () async {
+    final fake = MockClient((request) async {
+      expect(request.url.path, '/api/units/lisa%2001/telemetry');
+      return http.Response(
+        jsonEncode({
+          'unit': 'lisa 01',
+          'up': true,
+          'collected_at': 10,
+          'samples': {'rackphone_uptime_seconds': 12.5},
+        }),
+        200,
+      );
+    });
+    final GatewayApi client = GatewayClient(
+      baseUrl: Uri.parse('https://gateway.example'),
+      httpClient: fake,
+    );
+
+    final telemetry = await client.telemetry('lisa 01');
+
+    expect(telemetry.unit, 'lisa 01');
+    expect(telemetry.uptime, 12.5);
+  });
+
+  for (final status in [403, 404]) {
+    test('telemetry HTTP $status remains a typed gateway failure', () async {
+      final GatewayApi client = GatewayClient(
+        baseUrl: Uri.parse('https://gateway.example'),
+        httpClient: MockClient((_) async => http.Response('{}', status)),
+      );
+
+      await expectLater(
+        client.telemetry('lisa01'),
+        throwsA(isA<GatewayException>()),
+      );
+    });
+  }
+
   test('close leaves an injected client open', () async {
     final fake = _TrackingClient(
       MockClient((_) async => http.Response('{}', 200)),

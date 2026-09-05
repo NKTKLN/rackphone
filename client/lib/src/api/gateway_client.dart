@@ -38,6 +38,7 @@ abstract class GatewayApi {
   });
   Future<List<GatewayEvent>> messages({String? unit, int? since, int? limit});
   Future<List<GatewayEvent>> calls({String? unit, int? since, int? limit});
+  Future<UnitTelemetry> telemetry(String unit);
   Stream<GatewayEvent> stream();
   void close();
 }
@@ -129,6 +130,22 @@ class GatewayClient implements GatewayApi {
       () => http.Request('GET', _uri('/api/stats')),
     );
     return GatewayStats.fromJson(
+      _jsonObject(await response.stream.bytesToString()),
+    );
+  }
+
+  @override
+  Future<UnitTelemetry> telemetry(String unit) async {
+    // The unit name lands in a path segment, so it is encoded rather than
+    // interpolated: a label carrying a space or a slash would otherwise change
+    // which route is being asked for.
+    final response = await _authenticated(
+      () => http.Request(
+        'GET',
+        _uri('/api/units/${Uri.encodeComponent(unit)}/telemetry'),
+      ),
+    );
+    return UnitTelemetry.fromJson(
       _jsonObject(await response.stream.bytesToString()),
     );
   }
@@ -337,6 +354,8 @@ class GatewayClient implements GatewayApi {
         throw GatewayAuthException(reason);
       case 403:
         throw GatewayForbiddenException(reason);
+      case 404:
+        throw const GatewayUnavailableException();
       case 423:
         final seconds =
             int.tryParse(_header(headers, 'retry-after') ?? '') ?? 0;

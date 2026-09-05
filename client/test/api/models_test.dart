@@ -20,8 +20,29 @@ void main() {
     expect(event.receivedAt, isNull);
     expect(stats.eventsByKind, isEmpty);
     expect(stats.drained, 0);
+    expect(stats.security, isNull);
     expect(health.ntfyEnabled, isFalse);
     expect(session.revokedAt, isNull);
+  });
+
+  test('telemetry getters use the exported metric names', () {
+    final telemetry = UnitTelemetry.fromJson(const {
+      'unit': 'lisa01',
+      'up': true,
+      'collected_at': 42,
+      'samples': {
+        'rackphone_battery_capacity_percent': 73,
+        'rackphone_battery_temperature_celsius': 31.5,
+        'rackphone_temperature_celsius': 34,
+        'rackphone_uptime_seconds': 9001,
+      },
+    });
+
+    expect(telemetry.batteryPercent, 73.0);
+    expect(telemetry.batteryTemperature, 31.5);
+    expect(telemetry.skinTemperature, 34.0);
+    expect(telemetry.uptime, 9001.0);
+    expect(() => telemetry.samples['extra'] = 1, throwsUnsupportedError);
   });
 
   test('value models compare by content and expose capabilities', () {
@@ -53,9 +74,18 @@ void main() {
         'push_failed': 2,
         'errors': 4,
       },
+      'security': {
+        'last_login_at': 100,
+        'last_login_device': 'console',
+        'failed_logins_24h': 2,
+        'locked_until': null,
+        'totp_enabled': true,
+      },
     });
 
     expect(stats.eventsByKind, {'sms': 3});
     expect(stats.pushFailed, 2);
+    expect(stats.security?.lastLoginDevice, 'console');
+    expect(stats.security?.totpEnabled, isTrue);
   });
 }

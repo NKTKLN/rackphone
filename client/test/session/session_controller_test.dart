@@ -255,6 +255,9 @@ final class CountingStore implements TokenStore {
 }
 
 final class FakeGateway implements GatewayApi {
+  @override
+  Future<UnitTelemetry> telemetry(String unit) => throw UnimplementedError();
+
   FakeGateway({
     this.loginTokens,
     this.refreshedTokens,

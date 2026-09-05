@@ -153,6 +153,96 @@ class GatewayEvent {
   );
 }
 
+/// A current, finite subset of one unit's exported Prometheus samples.
+class UnitTelemetry {
+  UnitTelemetry({
+    required this.unit,
+    required this.up,
+    required this.collectedAt,
+    required Map<String, double> samples,
+  }) : samples = Map.unmodifiable(samples);
+
+  factory UnitTelemetry.fromJson(Map<String, dynamic> json) => UnitTelemetry(
+    unit: _string(json['unit']),
+    up: json['up'] == true,
+    collectedAt: _int(json['collected_at']) ?? 0,
+    samples: _doubleMap(json['samples']),
+  );
+
+  final String unit;
+  final bool up;
+  final int collectedAt;
+  final Map<String, double> samples;
+
+  double? get batteryPercent => samples['rackphone_battery_capacity_percent'];
+  double? get batteryTemperature =>
+      samples['rackphone_battery_temperature_celsius'];
+  double? get skinTemperature => samples['rackphone_temperature_celsius'];
+  double? get uptime => samples['rackphone_uptime_seconds'];
+
+  @override
+  bool operator ==(Object other) =>
+      other is UnitTelemetry &&
+      unit == other.unit &&
+      up == other.up &&
+      collectedAt == other.collectedAt &&
+      _mapEquals(samples, other.samples);
+
+  @override
+  int get hashCode => Object.hash(
+    unit,
+    up,
+    collectedAt,
+    Object.hashAllUnordered(
+      samples.entries.map((entry) => Object.hash(entry.key, entry.value)),
+    ),
+  );
+}
+
+/// Authentication posture included in new gateway statistics responses.
+class SecuritySummary {
+  const SecuritySummary({
+    required this.lastLoginAt,
+    required this.lastLoginDevice,
+    required this.failedLogins24h,
+    required this.lockedUntil,
+    required this.totpEnabled,
+  });
+
+  factory SecuritySummary.fromJson(Map<String, dynamic> json) =>
+      SecuritySummary(
+        lastLoginAt: _int(json['last_login_at']),
+        lastLoginDevice: _nullableString(json['last_login_device']),
+        failedLogins24h: _int(json['failed_logins_24h']) ?? 0,
+        lockedUntil: _int(json['locked_until']),
+        totpEnabled: json['totp_enabled'] == true,
+      );
+
+  final int? lastLoginAt;
+  final String? lastLoginDevice;
+  final int failedLogins24h;
+  final int? lockedUntil;
+  final bool totpEnabled;
+
+  @override
+  bool operator ==(Object other) =>
+      other is SecuritySummary &&
+      lastLoginAt == other.lastLoginAt &&
+      lastLoginDevice == other.lastLoginDevice &&
+      failedLogins24h == other.failedLogins24h &&
+      lockedUntil == other.lockedUntil &&
+      totpEnabled == other.totpEnabled;
+
+  @override
+  int get hashCode => Object.hash(
+    lastLoginAt,
+    lastLoginDevice,
+    failedLogins24h,
+    lockedUntil,
+    totpEnabled,
+  );
+}
+
 /// Store totals and optional live-drain counters from the same snapshot.
 class GatewayStats {
   GatewayStats({
@@ -163,6 +253,7 @@ class GatewayStats {
     required this.pushed,
     required this.pushFailed,
     required this.errors,
+    this.security,
   }) : eventsByKind = Map.unmodifiable(eventsByKind);
 
   factory GatewayStats.fromJson(Map<String, dynamic> json) {
@@ -175,6 +266,9 @@ class GatewayStats {
       pushed: _int(gateway['pushed']) ?? 0,
       pushFailed: _int(gateway['push_failed']) ?? 0,
       errors: _int(gateway['errors']) ?? 0,
+      security: json['security'] is Map
+          ? SecuritySummary.fromJson(_map(json['security']))
+          : null,
     );
   }
 
@@ -185,6 +279,7 @@ class GatewayStats {
   final int pushed;
   final int pushFailed;
   final int errors;
+  final SecuritySummary? security;
 
   @override
   bool operator ==(Object other) =>
@@ -195,7 +290,8 @@ class GatewayStats {
       filtered == other.filtered &&
       pushed == other.pushed &&
       pushFailed == other.pushFailed &&
-      errors == other.errors;
+      errors == other.errors &&
+      security == other.security;
 
   @override
   int get hashCode => Object.hash(
@@ -208,6 +304,7 @@ class GatewayStats {
     pushed,
     pushFailed,
     errors,
+    security,
   );
 }
 
@@ -316,6 +413,15 @@ Map<String, int> _intMap(dynamic value) {
   for (final entry in _map(value).entries) {
     final number = _int(entry.value);
     if (number != null) result[entry.key] = number;
+  }
+  return result;
+}
+
+Map<String, double> _doubleMap(dynamic value) {
+  final result = <String, double>{};
+  for (final entry in _map(value).entries) {
+    final number = entry.value;
+    if (number is num) result[entry.key] = number.toDouble();
   }
   return result;
 }

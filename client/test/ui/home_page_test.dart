@@ -65,6 +65,9 @@ Widget _home(SessionController controller) => MaterialApp(
 
 final class _HomeGateway implements GatewayApi {
   @override
+  Future<UnitTelemetry> telemetry(String unit) => throw UnimplementedError();
+
+  @override
   Future<Tokens> logIn({
     required String username,
     required String password,

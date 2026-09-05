@@ -60,6 +60,10 @@ final class SessionController extends ChangeNotifier {
 
   SessionState get state => _state;
 
+  /// Screens receive only the authenticated API boundary, never its durable
+  /// refresh token or the store that protects it.
+  GatewayApi? get gateway => _gateway;
+
   RackUnit? get selectedUnit {
     final units = _state.units;
     if (units.isEmpty) return null;

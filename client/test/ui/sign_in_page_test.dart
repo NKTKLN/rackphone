@@ -137,6 +137,9 @@ Future<void> _completeRequiredFields(WidgetTester tester) async {
 }
 
 final class _FakeGateway implements GatewayApi {
+  @override
+  Future<UnitTelemetry> telemetry(String unit) => throw UnimplementedError();
+
   _FakeGateway({this.loginFailures = const [], this.refreshFailure});
 
   final List<GatewayException> loginFailures;
