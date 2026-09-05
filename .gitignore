@@ -30,3 +30,6 @@ DEPLOY.local.md
 
 # Черновики вырезанных кусков документации, не для публикации.
 tmp/
+
+# Kotlin build cache, written beside the Gradle project.
+.kotlin/

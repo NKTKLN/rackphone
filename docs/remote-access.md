@@ -40,10 +40,24 @@ adds single-digit milliseconds.
 ## What runs on the phone
 
 `rackphone-remote` is a Magisk plugin like any other, declared the way
-[modules.md](modules.md) describes, and it ships **`scrcpy-server.jar` as a
-vendored artifact**, pinned by version and checksum in `dist/SHA256SUMS`
-alongside the module zips. It is Apache-2.0, so its licence text and NOTICE ship
-with it.
+[modules.md](modules.md) describes. It owns the vendored server at
+`$MODDIR/rackphone/scrcpy-server.jar`; the digest pinned beside it in
+`scrcpy-server.sha256` must match before `start` will give the jar root's
+`app_process`. A missing jar, missing digest, malformed digest, or mismatch is a
+hard refusal, not a warning followed by hopeful execution.
+
+Five settings shape the next session: `bitrate` controls detail and encoder/USB
+work, `max_size` caps the longer edge, and `max_fps` trades motion smoothness for
+heat. `turn_screen_off` defaults on to spare power and OLED wear, while
+`show_touches` defaults off so input markers do not obscure the stream.
+
+The plugin exposes three actions. `start` verifies the artifact and creates one
+session, refusing if one is already active; `stop` ends it and succeeds even
+when it has already gone, so every host close path can call it; and `version`
+prints the server protocol version and the jar's verified SHA-256. Status shows
+active or idle, the PID when active, the jar version, and verification state.
+Metrics expose both whether a session is running and its age so a client that
+failed to close is alertable.
 
 Vendoring rather than reimplementing is the whole decision. Screen capture and
 input injection both go through hidden platform APIs that move between Android
@@ -61,11 +75,12 @@ Two paths were rejected outright:
 - **`screenrecord`.** No input, encoder-buffered latency, and a recording time
   limit. Fine for a video file, useless for control.
 
-The plugin owns the jar; it does not own a running process. The server is
-started for a session and killed when it ends, so a rack with nobody watching it
-is a rack with no encoder running — which matters for the skin sensor
+The plugin owns the jar and the ephemeral process, but starts nothing at boot.
+The server is started for a session and killed when it ends, so a rack with
+nobody watching it is a rack with no encoder running — which matters for the skin sensor
 `quiet_therm` in [thermal-zones.md](thermal-zones.md), throttling at 55 °C, and
-for the pack the battery guard is protecting.
+for the pack the battery guard is protecting. The vendored scrcpy distribution
+remains Apache-2.0, so its licence and NOTICE accompany the packaged artifact.
 
 ## Sessions
 

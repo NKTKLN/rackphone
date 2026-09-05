@@ -30,12 +30,14 @@ bad = 0
 for decl in sorted(root.glob("modules/*/rackphone/plugin.json")):
     d = json.loads(decl.read_text())
     env = decl.parent / "defaults.env"
+    # Source trees may omit generated defaults; build-modules.sh creates them.
+    if not env.exists():
+        continue
     have = {}
-    if env.exists():
-        for line in env.read_text().splitlines():
-            if line.strip() and not line.startswith("#") and "=" in line:
-                k, v = line.split("=", 1)
-                have[k.strip()] = v
+    for line in env.read_text().splitlines():
+        if line.strip() and not line.startswith("#") and "=" in line:
+            k, v = line.split("=", 1)
+            have[k.strip()] = v
     for s in d.get("settings", []):
         want = str(s.get("default", ""))
         if have.get(s["key"]) != want:
@@ -49,7 +51,7 @@ print("  defaults.env agrees with plugin.json" if not bad else "")
 sys.exit(bad)
 PY
 
-for t in test_resolve test_metrics test_battery test_companion; do
+for t in test_resolve test_metrics test_battery test_companion test_remote; do
   banner "${t#test_}"
   bash "$HERE/$t.sh" || RC=1
 done

@@ -6,7 +6,7 @@
 [![Android](https://img.shields.io/badge/Android-min%2026%20·%20target%2036-3DDC84?logo=android&logoColor=white)](https://developer.android.com/)
 [![Material](https://img.shields.io/badge/Material-3-757575?logo=materialdesign&logoColor=white)](https://m3.material.io/)
 [![Magisk](https://img.shields.io/badge/Magisk-driven%20by%20broadcast-00AF9C)](https://github.com/topjohnwu/Magisk)
-[![Tests](https://img.shields.io/badge/tests-38%20Dart%20·%2028%20Kotlin-0A9EDC?logo=flutter&logoColor=white)](#-tests)
+[![Tests](https://img.shields.io/badge/tests-38%20Dart%20·%2032%20Kotlin-0A9EDC?logo=flutter&logoColor=white)](#-tests)
 [![Conventional Commits](https://img.shields.io/badge/Conventional%20Commits-1.0.0-FE5196?logo=conventionalcommits&logoColor=white)](https://www.conventionalcommits.org/)
 [![License](https://img.shields.io/badge/License-MIT-blue)](../LICENSE.md)
 [![Made with Claude Code](https://img.shields.io/badge/Made%20with-Claude%20Code-D97757?logo=claude&logoColor=white)](https://claude.com/claude-code)

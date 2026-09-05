@@ -1,0 +1,58 @@
+{
+  "id": "remote",
+  "name": "Remote Access",
+  "description": "A verified scrcpy server, started only for the lifetime of one remote-control session.",
+  "icon": "screen",
+  "settings": [
+    {
+      "key": "bitrate",
+      "type": "int",
+      "default": "4000000",
+      "min": 500000,
+      "max": 20000000,
+      "label": "Video bitrate",
+      "unit": "bit/s",
+      "help": "More bitrate preserves detail while the screen moves, at the cost of more USB traffic and encoder work. Four megabits leaves ample headroom on USB 2.0."
+    },
+    {
+      "key": "max_size",
+      "type": "int",
+      "default": "1080",
+      "min": 480,
+      "max": 2160,
+      "label": "Maximum video size",
+      "unit": "px",
+      "help": "A smaller frame lowers encoder heat and client decode work; a larger one keeps fine text legible. 1080 is the useful balance for a phone screen."
+    },
+    {
+      "key": "max_fps",
+      "type": "int",
+      "default": "60",
+      "min": 15,
+      "max": 60,
+      "label": "Maximum frame rate",
+      "unit": "fps",
+      "help": "Higher frame rates make scrolling and pointer feedback smoother, but make the encoder wake more often and heat the unit faster."
+    },
+    {
+      "key": "turn_screen_off",
+      "type": "bool",
+      "default": "1",
+      "label": "Turn the phone screen off",
+      "help": "Keeps an unattended panel from spending power, adding heat, and burning a static image into OLED while the remote stream remains visible."
+    },
+    {
+      "key": "show_touches",
+      "type": "bool",
+      "default": "0",
+      "label": "Show touch points",
+      "help": "Useful when demonstrating where remote input lands, but the marker obscures the pixels beneath it and appears in the captured video."
+    }
+  ],
+  "actions": [
+    { "id": "start", "label": "Start a remote session" },
+    { "id": "stop", "label": "Stop the remote session" },
+    { "id": "version", "label": "Show server version and checksum" }
+  ],
+  "status": ["session", "pid", "jar_version", "jar_verified"]
+}
