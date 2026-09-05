@@ -341,8 +341,12 @@ ntfy. Three controls:
 - Metrics carry **counters only**. No numbers, no bodies; a metric label is
   unbounded-cardinality by nature and Prometheus is the wrong store for content.
 
-App notification mirroring is deliberately not implemented. It would copy
-arbitrary third-party content off the device for no benefit to what this does.
+App notification mirroring **is** implemented, and it is the loosest of these
+controls: it copies arbitrary third-party content off the device. Two things
+narrow it. Pushes default to silence — a notification reaches the store and goes
+no further until an `allow` rule names its package — and the store forgets
+notifications after thirty days, while SMS and calls are kept. See
+[remote-access.md](remote-access.md).
 
 An ntfy topic is a shared secret, not an access control. Anyone who knows the
 topic name can read it unless the server enforces auth on read.
