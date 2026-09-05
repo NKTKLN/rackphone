@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:rackphone_client/src/api/gateway_client.dart';
@@ -39,12 +41,30 @@ void main() {
     final selected = tester.widget<Text>(find.text('unit-2'));
     expect(selected.style?.fontWeight, FontWeight.w700);
   });
+
+  testWidgets('switching units replaces the feed and cancels its tail', (
+    tester,
+  ) async {
+    final gateway = _HomeGateway();
+    final controller = await _signedInController(gateway);
+    await tester.pumpWidget(_home(controller));
+    await tester.pump();
+
+    await tester.tap(find.text('Notifications'));
+    await tester.pump();
+    expect(gateway.queriedUnits, ['unit-1']);
+
+    await tester.tap(find.text('unit-2'));
+    await tester.pump();
+    expect(gateway.queriedUnits, ['unit-1', 'unit-2']);
+    expect(gateway.cancelledTails, 1);
+  });
 }
 
-Future<SessionController> _signedInController() async {
+Future<SessionController> _signedInController([_HomeGateway? fake]) async {
   final controller = SessionController(
     tokenStore: InMemoryTokenStore(),
-    gatewayFactory: (_) => _HomeGateway(),
+    gatewayFactory: (_) => fake ?? _HomeGateway(),
   );
   await controller.signIn(
     baseUrl: Uri.parse('https://rack.example/'),
@@ -64,8 +84,12 @@ Widget _home(SessionController controller) => MaterialApp(
 );
 
 final class _HomeGateway implements GatewayApi {
+  final List<String?> queriedUnits = [];
+  int cancelledTails = 0;
+
   @override
-  Future<UnitTelemetry> telemetry(String unit) => throw UnimplementedError();
+  Future<UnitTelemetry> telemetry(String unit) async =>
+      UnitTelemetry(unit: unit, up: true, collectedAt: 0, samples: const {});
 
   @override
   Future<Tokens> logIn({
@@ -112,7 +136,10 @@ final class _HomeGateway implements GatewayApi {
     String? unit,
     int? since,
     int? limit,
-  }) => throw UnimplementedError();
+  }) async {
+    queriedUnits.add(unit);
+    return const [];
+  }
 
   @override
   Future<GatewayHealth> health() => throw UnimplementedError();
@@ -122,8 +149,20 @@ final class _HomeGateway implements GatewayApi {
       throw UnimplementedError();
 
   @override
-  Future<GatewayStats> stats() => throw UnimplementedError();
+  Future<GatewayStats> stats() async => GatewayStats(
+    eventsByKind: const {},
+    drained: 0,
+    stored: 0,
+    filtered: 0,
+    pushed: 0,
+    pushFailed: 0,
+    errors: 0,
+  );
 
   @override
-  Stream<GatewayEvent> stream() => throw UnimplementedError();
+  Stream<GatewayEvent> stream() {
+    final stream = StreamController<GatewayEvent>();
+    stream.onCancel = () => cancelledTails++;
+    return stream.stream;
+  }
 }

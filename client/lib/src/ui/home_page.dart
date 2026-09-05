@@ -1,6 +1,11 @@
 import 'package:flutter/material.dart';
 
+import '../data/feed_controller.dart';
 import '../session/session_controller.dart';
+import 'pages/feed_page.dart';
+import 'pages/messages_page.dart';
+import 'pages/overview_page.dart';
+import 'pages/screen_page.dart';
 import 'unit_bar.dart';
 
 /// Keeps destination state independent from the controller-owned unit choice.
@@ -30,6 +35,36 @@ class _HomePageState extends State<HomePage> {
     ),
   ];
   int _destination = 0;
+  FeedController? _feedController;
+  String? _feedUnit;
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    _updateFeedController();
+  }
+
+  @override
+  void didUpdateWidget(covariant HomePage oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    _updateFeedController();
+  }
+
+  void _updateFeedController() {
+    final unit = widget.controller.selectedUnit;
+    final gateway = widget.controller.gateway;
+    if (unit == null || gateway == null) return;
+    if (_feedUnit == unit.name && _feedController != null) return;
+    _feedController?.dispose();
+    _feedUnit = unit.name;
+    _feedController = FeedController(gateway: gateway, unit: unit.name);
+  }
+
+  @override
+  void dispose() {
+    _feedController?.dispose();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) => Scaffold(
@@ -42,18 +77,37 @@ class _HomePageState extends State<HomePage> {
         onSelect: widget.controller.select,
       ),
     ),
-    body: Center(
-      child: Text(
-        _destinations[_destination].label,
-        style: Theme.of(context).textTheme.titleMedium?.copyWith(
-          color: Theme.of(context).colorScheme.onSurfaceVariant,
-        ),
-      ),
-    ),
+    body: _body(),
     bottomNavigationBar: NavigationBar(
       selectedIndex: _destination,
       onDestinationSelected: (value) => setState(() => _destination = value),
       destinations: _destinations,
     ),
   );
+
+  Widget _body() {
+    final unit = widget.controller.selectedUnit;
+    final gateway = widget.controller.gateway;
+    final feed = _feedController;
+    if (unit == null || gateway == null || feed == null) {
+      return const Center(
+        child: Text(
+          'No unit is available. Refresh the unit list to try again.',
+        ),
+      );
+    }
+    return switch (_destination) {
+      0 => OverviewPage(
+        key: ValueKey('overview-${unit.name}'),
+        gateway: gateway,
+        unit: unit,
+      ),
+      1 => FeedPage(key: ValueKey('feed-${unit.name}'), controller: feed),
+      2 => MessagesPage(
+        key: ValueKey('messages-${unit.name}'),
+        controller: feed,
+      ),
+      _ => ScreenPage(key: ValueKey('screen-${unit.name}'), unit: unit),
+    };
+  }
 }
