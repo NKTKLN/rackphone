@@ -6,8 +6,38 @@ poll_seconds = 5
 api_host = "127.0.0.1"
 api_port = 9106
 # api_token = "generate-a-long-random-string"
+# Two lifetimes, because "log in once" and "revoke now" are both wanted: the
+# refresh token is what a device keeps, the access token is what signs requests
+# and expires on its own, so a revoked device stops working within the shorter
+# one without a database lookup on every request.
+# access_ttl_seconds = 900
+# refresh_ttl_seconds = 2592000
+
+# A non-loopback API refuses to start without both administrator credentials.
+# [admin]
+# username = "admin"
+# password_hash = "generate-with-rackphone-admin"
+
+# How long each kind of event is kept. A rack unit produces notifications by
+# the hundred per day, so they expire; SMS and calls are few and worth keeping,
+# and 0 means forever. Removal runs hourly inside the drain loop.
+# [retention]
+# sms = 0
+# call = 0
+# notification = 30
+
+# Capabilities are narrowed here because authorisation belongs to the host, not
+# to device state a phone can read and edit. Units without a section keep all
+# capabilities, preserving access for configurations written before this key.
+# [units.lisa01]
+# capabilities = ["sms", "notifications", "screen", "files"]
 
 [ntfy]
+# ntfy is the second channel, independent of the app. `enabled = false` stops
+# it without losing the server details below; `mirror = true` pushes everything,
+# while the default pushes only what no connected client was there to receive.
+# enabled = true
+# mirror = false
 # Leave url empty to store and serve events without pushing anywhere.
 url = ""
 topic = ""
