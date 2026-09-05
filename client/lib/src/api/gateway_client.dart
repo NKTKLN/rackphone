@@ -7,7 +7,11 @@ import 'errors.dart';
 import 'models.dart';
 
 typedef RefreshTokenProvider = Future<String?> Function();
-typedef TokensRenewed = void Function(Tokens tokens);
+
+/// Awaited, not fired and forgotten: the server rotates the refresh token as
+/// it renews, so a caller that persists the new one must be given the chance to
+/// finish before the old one is used again.
+typedef TokensRenewed = FutureOr<void> Function(Tokens tokens);
 
 /// The gateway operations are an interface so screens can be exercised
 /// without a network, credentials, or a running rack underneath them.
@@ -257,8 +261,8 @@ class GatewayClient implements GatewayApi {
   Future<Tokens> _renewOnce(String refreshToken) {
     final running = _renewal;
     if (running != null) return running;
-    final started = refresh(refreshToken).then((tokens) {
-      _onTokensRenewed?.call(tokens);
+    final started = refresh(refreshToken).then((tokens) async {
+      await _onTokensRenewed?.call(tokens);
       return tokens;
     });
     _renewal = started.whenComplete(() => _renewal = null);

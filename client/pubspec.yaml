@@ -15,6 +15,9 @@ dependencies:
     sdk: flutter
   # Streamed responses, which the event stream needs; the rest is plain requests.
   http: ^1.5.0
+  # The refresh token is what a lost phone would hand over, so it lives behind
+  # the Android Keystore rather than in a file this app can read on its own.
+  flutter_secure_storage: ^9.2.4
 
 dev_dependencies:
   flutter_test:

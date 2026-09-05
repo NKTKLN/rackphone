@@ -19,7 +19,9 @@ android {
         applicationId = "com.nktkln.rackphone.client"
         // You can update the following values to match your application needs.
         // For more information, see: https://flutter.dev/to/review-gradle-config.
-        minSdk = flutter.minSdkVersion
+        // Matches the companion: API 26 is where the Keystore-backed storage and
+        // the notification behaviour this app relies on are dependable.
+        minSdk = 26
         targetSdk = flutter.targetSdkVersion
         versionCode = flutter.versionCode
         versionName = flutter.versionName
