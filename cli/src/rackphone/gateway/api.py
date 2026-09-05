@@ -7,6 +7,7 @@ FastAPI contract, including scopes and per-unit capabilities.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import hmac
 import json
 import time
@@ -16,7 +17,16 @@ from http import HTTPStatus
 from ipaddress import ip_address
 from typing import Annotated, Any
 
-from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request, Response
+from fastapi import (
+    Depends,
+    FastAPI,
+    Header,
+    HTTPException,
+    Query,
+    Request,
+    Response,
+    WebSocket,
+)
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
@@ -32,6 +42,7 @@ from rackphone.gateway.config import DEFAULT_TRUSTED_PROXIES, GatewayConfig
 from rackphone.gateway.drain import MessageGateway
 from rackphone.gateway.login import LoginService, RefusalReason, Tokens
 from rackphone.gateway.presence import ClientPresence
+from rackphone.gateway.relay import ScreenRelay
 from rackphone.gateway.send import SendError, send_sms
 from rackphone.gateway.session import SessionBusy, SessionManager
 from rackphone.gateway.store import (
@@ -46,6 +57,7 @@ from rackphone.metrics.exposition import collect_unit_metrics, parse_samples
 
 STREAM_POLL_SECONDS = 2.0
 STREAM_BATCH_SIZE = 100
+SCREEN_HEARTBEAT_SECONDS = 10
 
 LimitQuery = Annotated[int, Query(ge=1, le=MAX_QUERY_LIMIT)]
 KNOWN_SCOPES = frozenset({SCOPE_READ, SCOPE_CONTROL, SCOPE_ADMIN})
@@ -238,6 +250,19 @@ def create_app(  # noqa: C901, PLR0913, PLR0915, PLR0917
         if "screen" not in config.capabilities_for(unit):
             raise HTTPException(HTTPStatus.FORBIDDEN, "unit capability denied")
 
+    async def relay_heartbeat(unit: str, holder: str) -> None:
+        """Keep a WebSocket-owned screen lease fresh while it remains open."""
+        while True:
+            await asyncio.sleep(SCREEN_HEARTBEAT_SECONDS)
+            refreshed = await asyncio.to_thread(
+                screen_sessions.heartbeat,
+                unit,
+                screen_sessions.clock(),
+                holder,
+            )
+            if refreshed is None:
+                return
+
     def permitted_rows(
         kind: str | None,
         unit: str | None,
@@ -377,6 +402,58 @@ def create_app(  # noqa: C901, PLR0913, PLR0915, PLR0917
         screen_unit(unit)
         session = screen_sessions.get(unit)
         return None if session is None else asdict(session)
+
+    @app.websocket("/api/units/{unit}/screen")
+    async def relay_screen(websocket: WebSocket, unit: str) -> None:
+        """Hold a screen session and relay its opaque video and control bytes."""
+        try:
+            holder = control_holder(websocket.headers.get("authorization", ""))
+            screen_unit(unit)
+        except HTTPException as exc:
+            await websocket.close(code=1008, reason=str(exc.detail))
+            return
+
+        relay: ScreenRelay | None = None
+        session = None
+        acquired = False
+        try:
+            try:
+                session = await asyncio.to_thread(
+                    screen_sessions.acquire,
+                    unit,
+                    holder,
+                    screen_sessions.clock(),
+                )
+                acquired = True
+            except SessionBusy as exc:
+                await websocket.close(code=1008, reason=str(exc))
+                return
+            relay = ScreenRelay("127.0.0.1", int(session.local_port))
+            await relay.open()
+            await websocket.accept()
+            await relay.pump(
+                websocket,
+                heartbeat=lambda: relay_heartbeat(unit, holder),
+            )
+            await websocket.close()
+        except Exception:
+            await websocket.close(code=1011, reason="screen relay ended")
+        finally:
+            # Nothing cancellable may stand between here and the release. By the
+            # time this runs the client is usually gone and this task is already
+            # being cancelled, and a single `await` would raise straight past
+            # the release - leaving the phone encoding a screen nobody watches.
+            # The manager's calls are synchronous, so they are made directly;
+            # blocking this loop for the length of one adb call is the cheaper
+            # of the two failures.
+            if acquired and screen_sessions.get(unit) == session:
+                # An explicit takeover may replace this socket's session while
+                # the pump unwinds. The old socket must not release the new
+                # owner, which is what the comparison above is for.
+                screen_sessions.release(unit, screen_sessions.clock())
+            if relay is not None:
+                with contextlib.suppress(Exception):
+                    await relay.close()
 
     @app.get("/api/units/{unit}/telemetry", dependencies=read_auth)
     def read_telemetry(unit: str) -> dict[str, Any]:

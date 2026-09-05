@@ -10,6 +10,9 @@ dependencies = [
   "httpx>=0.28.1",
   "rich>=13.7",
   "uvicorn>=0.52.4",
+  # uvicorn speaks HTTP on its own; the screen relay needs the WebSocket
+  # half, and that is a separate implementation rather than an extra.
+  "websockets>=15.0",
 ]
 
 [project.scripts]

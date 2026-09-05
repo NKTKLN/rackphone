@@ -8,12 +8,17 @@ from __future__ import annotations
 
 import asyncio
 import json
+import socket
+import threading
+import time
 from collections.abc import AsyncGenerator, Iterator
+from contextlib import contextmanager
 from pathlib import Path
-from typing import cast
+from typing import Any, cast
 
 import pytest
 from conftest import EventFactory
+from fastapi import WebSocketDisconnect
 from fastapi.testclient import TestClient
 
 from rackphone.device import adb
@@ -629,6 +634,96 @@ def test_health_stays_open_so_a_probe_still_works(
     ) as client:
         assert client.get("/health").status_code == HTTP_OK
     auth_store.close()
+
+
+@contextmanager
+def fake_forwarded_device() -> Iterator[int]:
+    """Serve a port that accepts the relay's two connections and says nothing."""
+    listener = socket.socket()
+    listener.bind(("127.0.0.1", 0))
+    listener.listen(4)
+    accepted: list[socket.socket] = []
+    stop = threading.Event()
+
+    def serve() -> None:
+        listener.settimeout(0.2)
+        while not stop.is_set():
+            try:
+                connection, _ = listener.accept()
+            except TimeoutError:
+                continue
+            except OSError:
+                return
+            accepted.append(connection)
+
+    worker = threading.Thread(target=serve, daemon=True)
+    worker.start()
+    try:
+        yield listener.getsockname()[1]
+    finally:
+        stop.set()
+        worker.join(timeout=2)
+        for connection in accepted:
+            connection.close()
+        listener.close()
+
+
+def screen_app(
+    store: EventStore, tmp_path: Path, repo: Path, manager: SessionManager
+) -> tuple[Any, LoginService, AuthStore]:
+    """Build an app whose screen route reaches a fake forwarded port."""
+    (repo / "units" / "lisa01.env").write_text("")
+    config = GatewayConfig(
+        admin=AdminConfig("admin", hash_password("right")),
+        unit_capabilities={"lisa01": frozenset({"screen"})},
+    )
+    auth_store = AuthStore(tmp_path / "auth.db")
+    login = LoginService(config, auth_store)
+    return create_app(config, store, login, sessions=manager), login, auth_store
+
+
+def test_the_screen_socket_owns_its_session(
+    populated_store: EventStore,
+    tmp_path: Path,
+    repo: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # A session that outlives its socket leaves an encoder running on a phone
+    # nobody is watching, which is invisible until the unit gets hot.
+    manager = SessionManager(clock=lambda: 1000)
+    with fake_forwarded_device() as port:
+        monkeypatch.setattr(api.time, "time", lambda: 1000)
+        monkeypatch.setattr(adb, "resolve_serial", lambda serial: serial or "AAA")
+        monkeypatch.setattr(adb, "run_device_cli", lambda *_a, **_k: "")
+        monkeypatch.setattr(adb, "forward", lambda *_a: str(port))
+        monkeypatch.setattr(adb, "remove_forward", lambda *_a: None)
+        app, login, auth_store = screen_app(populated_store, tmp_path, repo, manager)
+        granted = login.log_in("admin", "right", "peer", "tablet", 1000)
+        assert granted.tokens is not None
+        headers = {"Authorization": f"Bearer {granted.tokens.access}"}
+
+        def released() -> bool:
+            # The socket's cleanup runs on the server side, so this waits for
+            # the effect rather than assuming it has already landed.
+            for _ in range(200):
+                if manager.get("lisa01") is None:
+                    return True
+                time.sleep(0.01)
+            return False
+
+        with TestClient(app) as client:
+            with client.websocket_connect("/api/units/lisa01/screen", headers=headers):
+                assert manager.get("lisa01") is not None
+            assert released()
+
+            # And an unauthenticated socket never acquires one at all.
+            with (
+                pytest.raises(WebSocketDisconnect),
+                client.websocket_connect("/api/units/lisa01/screen"),
+            ):
+                pass
+            assert manager.get("lisa01") is None
+        auth_store.close()
 
 
 def test_the_session_holder_cannot_be_named_by_the_caller(

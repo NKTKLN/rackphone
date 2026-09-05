@@ -103,6 +103,15 @@ Takeover is not a nicety. A client that dropped its network, slept, or was
 force-stopped still holds the session, and without a way to take it the phone
 becomes unreachable until the heartbeat expires.
 
+### Screen wire format
+
+The screen uses one WebSocket for both scrcpy connections. Every binary message
+starts with a channel byte: `0` carries video and `1` carries control; the rest
+of the message is passed through unchanged. The client must open video first
+and control second, matching scrcpy's `tunnel_forward=true` ordering. Unknown
+channel bytes are ignored so a newer client cannot end a session merely by
+sending a channel this gateway does not yet know.
+
 The display is switched off during capture because a rack unit's panel earns
 nothing by being lit: it costs power, heats the sensor Android throttles on, and
 burns a static image into OLED.
