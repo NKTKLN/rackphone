@@ -84,13 +84,19 @@ class Lockout:
     until: int
 
 
-def next_lockout(subject: str, level: int, now: int) -> Lockout:
+def next_lockout(
+    subject: str,
+    level: int,
+    now: int,
+    ladder: tuple[int, ...] = LOCKOUT_LADDER,
+) -> Lockout:
     """Build the next lockout for a subject, capped at the final duration.
 
     Args:
         subject: IP address or account identifier being locked.
         level: Previous escalation level; 0 selects the first rung.
         now: Current Unix timestamp in seconds.
+        ladder: Lockout durations in ascending escalation order.
 
     Returns:
         Lockout: The lockout to store, one rung further up the ladder.
@@ -98,9 +104,9 @@ def next_lockout(subject: str, level: int, now: int) -> Lockout:
     # The subject is taken here rather than left blank for the caller to fill:
     # an unfilled one is still a valid primary key, so a forgotten `replace`
     # would lock every subject under the same empty row.
-    rung = min(max(level, 0), len(LOCKOUT_LADDER) - 1)
-    next_level = min(rung + 1, len(LOCKOUT_LADDER))
-    return Lockout(subject, next_level, now + LOCKOUT_LADDER[rung])
+    rung = min(max(level, 0), len(ladder) - 1)
+    next_level = min(rung + 1, len(ladder))
+    return Lockout(subject, next_level, now + ladder[rung])
 
 
 class AuthStore:
