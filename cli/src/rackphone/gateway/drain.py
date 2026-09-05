@@ -17,7 +17,7 @@ from dataclasses import asdict, dataclass
 from rackphone import render, units
 from rackphone.device import adb
 from rackphone.gateway.config import GatewayConfig
-from rackphone.gateway.filters import first_match
+from rackphone.gateway.filters import should_push
 from rackphone.gateway.notify import NtfyError, NtfyForwarder
 from rackphone.gateway.presence import ClientPresence
 from rackphone.gateway.store import Event, EventStore
@@ -25,6 +25,7 @@ from rackphone.gateway.store import Event, EventStore
 DRAIN_TIMEOUT_SECONDS = 60
 ACK_TIMEOUT_SECONDS = 30
 UNREACHABLE_ALERT_SECONDS = 60 * 60
+PRUNE_INTERVAL_SECONDS = 60 * 60
 
 # The plugin that owns the spool on the device. It fronts the companion app,
 # which is what receives and sends; the CLI only needs to know the two action
@@ -84,6 +85,7 @@ class MessageGateway:
         self._last_success: dict[str, int] = {}
         self._outage_started: dict[str, int] = {}
         self._outage_alerted: set[str] = set()
+        self._last_prune: int | None = None
 
     def drain_unit(self, unit: units.Unit) -> int:
         """Drain one unit once.
@@ -130,11 +132,7 @@ class MessageGateway:
         return len(stored)
 
     def _forward(self, unit_name: str, events: list[Event]) -> None:
-        """Push newly stored events to the notification sink.
-
-        Events a filter matches are counted and skipped rather than pushed.
-        They stay in the store either way: a filter decides what is worth an
-        alert, not what is worth keeping.
+        """Push newly stored events that pass filter resolution.
 
         Args:
             unit_name: Unit the events came from, for the warning text.
@@ -143,8 +141,8 @@ class MessageGateway:
         if self.forwarder is None or not self.config.ntfy.is_configured:
             return
         for event in events:
-            rule = first_match(event, self.config.filters)
-            if rule is not None:
+            push, rule = should_push(event, self.config.filters)
+            if not push and rule is not None:
                 # Suppressed, not dropped: the event is already committed and
                 # is served on the API. Saying which rule ate it is the only
                 # way an over-broad filter is ever noticed.
@@ -170,6 +168,7 @@ class MessageGateway:
             How many new events were stored across all units.
         """
         total = 0
+        self._prune_if_due()
         for unit in units.load_all_units():
             try:
                 total += self.drain_unit(unit)
@@ -182,6 +181,18 @@ class MessageGateway:
                 render.warn(f"{unit.name}: {exc}")
                 self._record_outage(unit.name)
         return total
+
+    def _prune_if_due(self) -> None:
+        """Prune expired events when the hourly interval has elapsed."""
+        now = self.clock()
+        if self._last_prune is not None and (
+            now - self._last_prune < PRUNE_INTERVAL_SECONDS
+        ):
+            return
+        self._last_prune = now
+        removed = self.store.prune(self.config.retention, now)
+        if removed:
+            render.dim(f"pruned {removed} expired event(s)")
 
     def _record_outage(self, unit_name: str) -> None:
         """Alert once when one unit has been unreachable for an hour.

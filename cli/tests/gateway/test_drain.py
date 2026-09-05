@@ -328,6 +328,31 @@ class TestStats:
         assert gateway.stats.drained == 0
 
 
+class TestRetention:
+    def test_prunes_once_per_hour(
+        self, store: EventStore, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        now = [1_000]
+        calls: list[tuple[dict[str, int], int]] = []
+
+        def record(policy: dict[str, int], timestamp: int) -> int:
+            calls.append((policy, timestamp))
+            return 0
+
+        monkeypatch.setattr(store, "prune", record)
+        monkeypatch.setattr(units, "load_all_units", lambda: [])
+        config = GatewayConfig(retention={"notification": 30})
+        gateway = MessageGateway(config, store, clock=lambda: now[0])
+
+        gateway.run_once()
+        now[0] = 4_599
+        gateway.run_once()
+        now[0] = 4_600
+        gateway.run_once()
+
+        assert calls == [({"notification": 30}, 1_000), ({"notification": 30}, 4_600)]
+
+
 class TestOutageAlerts:
     @pytest.mark.usefixtures("repo")
     def test_alerts_once_per_outage_and_again_after_recovery(

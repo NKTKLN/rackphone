@@ -379,11 +379,12 @@ class GatewayConfig:
         """
         if not self.filters:
             return "none"
+        allow = sum(1 for rule in self.filters if rule.mode == "allow")
+        deny = sum(1 for rule in self.filters if rule.mode == "deny")
         disabled = sum(1 for rule in self.filters if not rule.enabled)
         # A rule left in the file but disabled is not filtering anything, and a
         # bare count would read as though it were.
-        suffix = f", {disabled} off" if disabled else ""
-        return f"{len(self.filters)} rule(s){suffix}"
+        return f"{allow} allow, {deny} deny, {disabled} off"
 
     def as_redacted_dict(self) -> dict[str, str]:
         """Render the configuration for display, hiding every secret.

@@ -52,23 +52,28 @@ priority_call = "high"
 timeout = 10.0
 retries = 3
 
-# Filters decide what is worth a notification. A matched event is still stored
-# and still served on the API - only the push is suppressed - so a rule that
-# turns out to be too broad costs you an alert, never a message.
+# Filters decide what is worth a notification. An allow rule names what should
+# be pushed; a deny rule names what should be suppressed. Either way every event
+# is still stored and served on the API, so a mistake costs an alert, not data.
 #
 # Keys inside a rule are ANDed, values inside a key are ORed, and all matching
 # is case-insensitive: `sender` is a glob, `contains` a substring, `matches` a
 # regular expression over the body. A rule with no conditions is refused rather
-# than applied.
+# than applied. `mode` defaults to `deny`, preserving older configurations.
 #
 # [[filters]]
-# name = "beeline-app-links"
-# kind = "sms"
-# sender = "beeline"
-# contains = "https://dl.beeline.ru/"
+# name = "notify-only-these"
+# mode = "allow"
+# kind = "notification"
+# sender = ["com.bank.*", "org.telegram.*"]
 #
 # [[filters]]
-# name = "operator-ads"
-# kind = "sms"
-# sender = ["beeline", "mtc", "megafon", "tele2"]
-# matches = "(акци|тариф|подключ|скидк)"
+# name = "bank-adverts"
+# mode = "deny"
+# kind = "notification"
+# sender = "com.bank.*"
+# contains = "special offer"
+#
+# A matching deny wins. Otherwise an event kind with allow rules needs an allow
+# match; kinds with no allow rules continue to be pushed. This lets a broad
+# sender allow-list keep a precise exception for one unwanted notification.

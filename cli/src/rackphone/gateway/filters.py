@@ -17,6 +17,13 @@ is the one that falls out of writing the obvious thing:
     sender = "beeline"
     contains = "https://dl.beeline.ru/"
 
+A rule is a `deny` unless it says otherwise, which is what SMS wants: they
+arrive in ones and twos and each is worth an alert until proven otherwise. App
+notifications arrive in hundreds and want the opposite, so a rule may instead
+say `mode = "allow"`, and once any allow rule exists for a kind, only what one
+of them matches is pushed. A deny rule still wins over an allow rule - see
+`should_push` for why.
+
 All matching is case-insensitive: `sender` is a glob, `contains` a substring,
 `matches` a regular expression over the body.
 """
@@ -26,7 +33,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 from fnmatch import fnmatchcase
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal
 
 if TYPE_CHECKING:
     from rackphone.gateway.store import Event
@@ -34,7 +41,7 @@ if TYPE_CHECKING:
 # Every key a rule may carry. Anything else is a typo, and a typo that is
 # quietly ignored is a filter that does not do what it says.
 RULE_KEYS = frozenset(
-    {"name", "enabled", "unit", "kind", "sender", "contains", "matches"}
+    {"name", "mode", "enabled", "unit", "kind", "sender", "contains", "matches"}
 )
 # The keys that actually narrow a rule. A rule with none of them matches every
 # event, which is never what somebody meant to write.
@@ -42,7 +49,7 @@ CONDITION_KEYS = ("unit", "kind", "sender", "contains", "matches")
 
 
 class FilterConfigError(ValueError):
-    """Raised when a filter rule is written in a way that cannot be honoured."""
+    """Reject a filter rule that cannot be honoured."""
 
 
 def _as_tuple(value: Any, rule_name: str, key: str) -> tuple[str, ...]:
@@ -90,9 +97,10 @@ def _matches_sender(address: str | None, patterns: tuple[str, ...]) -> bool:
 
 @dataclass(frozen=True)
 class FilterRule:
-    """One rule: what it matches, and the name it is reported under."""
+    """One named allow or deny rule and its matching conditions."""
 
     name: str
+    mode: Literal["allow", "deny"] = "deny"
     unit: tuple[str, ...] = ()
     kind: tuple[str, ...] = ()
     sender: tuple[str, ...] = ()
@@ -135,7 +143,7 @@ class FilterRule:
             event: The event about to be pushed.
 
         Returns:
-            Whether the event should be suppressed by this rule.
+            Whether the event matches this rule's conditions.
         """
         if not self.enabled:
             return False
@@ -203,6 +211,7 @@ class FilterRule:
 
         rule = cls(
             name=name,
+            mode=_read_mode(data.get("mode"), name),
             unit=_as_tuple(data.get("unit"), name, "unit"),
             kind=_as_tuple(data.get("kind"), name, "kind"),
             sender=_as_tuple(data.get("sender"), name, "sender"),
@@ -211,11 +220,40 @@ class FilterRule:
             enabled=bool(data.get("enabled", True)),
         )
         if not any(getattr(rule, key) for key in CONDITION_KEYS):
+            effect = (
+                "push every notification"
+                if rule.mode == "allow"
+                else ("suppress every notification")
+            )
             raise FilterConfigError(
-                f"filter {name!r}: has no conditions, so it would suppress every "
-                "notification; give it a sender, a kind, a unit or a body match"
+                f"filter {name!r}: has no conditions, so it would {effect}; give it "
+                "a sender, a kind, a unit or a body match"
             )
         return rule
+
+
+def _read_mode(value: Any, rule_name: str) -> Literal["allow", "deny"]:
+    """Read and validate a rule mode.
+
+    Args:
+        value: Raw TOML value, or None for the legacy deny default.
+        rule_name: Rule being read, for the error message.
+
+    Returns:
+        Literal["allow", "deny"]: The validated mode.
+
+    Raises:
+        FilterConfigError: If the mode is not `allow` or `deny`.
+    """
+    if value is None:
+        return "deny"
+    if value == "allow":
+        return "allow"
+    if value == "deny":
+        return "deny"
+    raise FilterConfigError(
+        f"filter {rule_name!r}: mode must be 'allow' or 'deny', not {value!r}"
+    )
 
 
 def _lowered(values: tuple[str, ...]) -> set[str]:
@@ -257,14 +295,40 @@ def load_rules(entries: Any) -> list[FilterRule]:
     ]
 
 
-def first_match(event: Event, rules: list[FilterRule]) -> FilterRule | None:
-    """Find the first rule that suppresses an event.
+def should_push(
+    event: Event, rules: list[FilterRule]
+) -> tuple[bool, FilterRule | None]:
+    """Decide whether an event should be pushed.
 
     Args:
         event: The event about to be pushed.
-        rules: The configured rules, in file order.
+        rules: Configured rules, in file order.
 
     Returns:
-        The rule that matched, or None when the event should be pushed.
+        tuple[bool, FilterRule | None]: Whether to push and the deciding rule,
+            if filtering made the decision.
     """
-    return next((rule for rule in rules if rule.matches_event(event)), None)
+    active = [rule for rule in rules if rule.enabled]
+    matching_deny = next(
+        (rule for rule in active if rule.mode == "deny" and rule.matches_event(event)),
+        None,
+    )
+    # Deny rules describe the narrower exception to a broad allow list. Letting
+    # the broad match win would make that precise exception impossible to write.
+    if matching_deny is not None:
+        return False, matching_deny
+
+    applicable_allows = [
+        rule
+        for rule in active
+        if rule.mode == "allow"
+        and (not rule.kind or event.kind.lower() in _lowered(rule.kind))
+    ]
+    matching_allow = next(
+        (rule for rule in applicable_allows if rule.matches_event(event)), None
+    )
+    if matching_allow is not None:
+        return True, matching_allow
+    if applicable_allows:
+        return False, applicable_allows[0]
+    return True, None

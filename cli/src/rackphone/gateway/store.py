@@ -125,6 +125,7 @@ class EventStore:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self.connection = sqlite3.connect(self.path, check_same_thread=False)
         self.connection.row_factory = sqlite3.Row
+        self.connection.execute("PRAGMA auto_vacuum=INCREMENTAL")
         # WAL so the API can read while the drain loop writes.
         self.connection.execute("PRAGMA journal_mode=WAL")
         self.connection.executescript(SCHEMA_SQL)
@@ -225,3 +226,35 @@ class EventStore:
         ).fetchone()
         latest: int = row["latest"]
         return latest
+
+    def prune(self, retention_days: dict[str, int], now: int) -> int:
+        """Delete events older than their kind's retention policy.
+
+        Args:
+            retention_days: Days to retain by kind; zero keeps a kind forever.
+            now: Current Unix timestamp used to calculate every cutoff.
+
+        Returns:
+            int: Number of deleted rows.
+        """
+        removed = 0
+        with self.connection:
+            for kind, days in retention_days.items():
+                if days == 0:
+                    continue
+                # Two clocks meet here. `ts` is what the device reported, in
+                # Unix milliseconds; `received_at` is when this host committed
+                # the row, in seconds. Comparing in seconds keeps the units in
+                # one place, and the fallback matters: an event that arrived
+                # without a device timestamp has a NULL `ts`, and a NULL never
+                # satisfies a comparison - so without COALESCE those rows would
+                # be the only ones retention could never remove.
+                cursor = self.connection.execute(
+                    "DELETE FROM events "
+                    "WHERE kind = ? AND COALESCE(ts / 1000, received_at) < ?",
+                    (kind, now - days * 24 * 60 * 60),
+                )
+                removed += cursor.rowcount
+        if removed:
+            self.connection.execute("PRAGMA incremental_vacuum")
+        return removed

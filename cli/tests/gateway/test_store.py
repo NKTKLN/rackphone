@@ -9,6 +9,7 @@ the annoyance the design was supposed to rule out.
 from __future__ import annotations
 
 import json
+import time
 
 import pytest
 from conftest import EventFactory
@@ -160,3 +161,37 @@ class TestQuery:
         assert store.latest_event_id() == 0
         store.add_events([make_event(1), make_event(2)])
         assert store.latest_event_id() == 2
+
+
+class TestRetention:
+    def test_prunes_by_kind_and_keeps_kinds_without_policy(
+        self, store: EventStore, make_event: EventFactory
+    ) -> None:
+        now = 10 * 86_400
+        store.add_events(
+            [
+                make_event(1, kind="notification", timestamp=(now - 3 * 86_400) * 1000),
+                make_event(2, kind="notification", timestamp=(now - 86_400) * 1000),
+                make_event(3, kind="future", timestamp=0),
+                make_event(4, kind="sms", timestamp=0),
+            ]
+        )
+
+        assert store.prune({"notification": 2, "sms": 0}, now) == 1
+        assert {row["source_id"] for row in store.query_events()} == {2, 3, 4}
+
+    def test_prunes_an_event_that_carried_no_device_timestamp(
+        self, store: EventStore, make_event: EventFactory
+    ) -> None:
+        # A NULL never satisfies a comparison, so without a fallback these are
+        # the only rows retention could never reach. `received_at` is stamped
+        # with the real clock, so the cutoff has to be in that frame too.
+        store.add_events([make_event(1, kind="notification", timestamp=None)])
+        forty_days_on = int(time.time()) + 40 * 86_400
+        assert store.prune({"notification": 30}, forty_days_on) == 1
+
+    def test_returns_zero_when_nothing_is_old_enough(
+        self, store: EventStore, make_event: EventFactory
+    ) -> None:
+        store.add_events([make_event(1, kind="notification", timestamp=100 * 1000)])
+        assert store.prune({"notification": 30}, 200) == 0

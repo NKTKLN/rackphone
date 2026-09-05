@@ -266,10 +266,17 @@ Filters are host-side rules in `gateway.toml` that decide what gets pushed:
 
 ```toml
 [[filters]]
-name = "beeline-app-links"
-kind = "sms"
-sender = "beeline"
-contains = "https://dl.beeline.ru/"
+name = "notify-only-these"
+mode = "allow"
+kind = "notification"
+sender = ["com.bank.*", "org.telegram.*"]
+
+[[filters]]
+name = "bank-adverts"
+mode = "deny"
+kind = "notification"
+sender = "com.bank.*"
+contains = "special offer"
 ```
 
 **A filter suppresses the push, never the record.** The message is still
@@ -288,8 +295,9 @@ you an alert is recoverable; costing you the SMS is not.
 | Key | Matches |
 | --- | --- |
 | `name` | Label reported in `gwconfig`, in the drain log and nowhere else |
+| `mode` | `allow` pushes matches; `deny` suppresses them (the default) |
 | `unit` | Unit name, as in `units/*.env` |
-| `kind` | `sms` or `call` |
+| `kind` | `sms`, `call` or `notification` |
 | `sender` | The address, as a glob: `beeline`, `beeline*`, `+7900*` |
 | `contains` | A substring of the body |
 | `matches` | A regular expression over the body |
@@ -309,13 +317,16 @@ matches = "(акци|тариф|подключ)"
 
 All matching is case-insensitive: the case an operator writes its own name in is
 its choice, not something to encode in a rule that then breaks when they change
-it. Rules are tested in file order and the first match wins.
+it. A matching `deny` suppresses first. Otherwise, when an event's kind has any
+active `allow` rules, one of them must match for the event to be pushed. A kind
+with no allow rules is pushed as before. Deny wins so a broad sender allow-list
+can retain a precise exception for one unwanted message.
 
-Two rules are refused at startup rather than applied, because both fail as
-silence: one with **no conditions**, which would suppress everything, and one
-with an **unknown key**, since `contain` instead of `contains` would quietly
-widen a filter from one advert to every SMS. The gateway will not start until
-the file is fixed.
+Rules with **no conditions** are refused at startup: an empty deny rule would
+suppress everything, while an empty allow rule would make its allow-list
+meaningless. An **unknown key** is also refused, since `contain` instead of
+`contains` would quietly widen a rule. The gateway will not start until the file
+is fixed.
 
 ```sh
 uv run --project cli rackphone gwconfig   # lists every rule and what it matches
@@ -324,6 +335,25 @@ uv run --project cli rackphone gwconfig   # lists every rule and what it matches
 A rule that reads the body cannot match when `include_body=0`: nothing was
 relayed, so the condition cannot be shown to hold, and an unproven filter pushes
 rather than suppresses.
+
+## Retention
+
+A rack unit produces notifications by the hundred per day, while SMS and calls
+are fewer and generally worth keeping. Retention is therefore set independently
+by event kind:
+
+```toml
+[retention]
+sms = 0
+call = 0
+notification = 30
+```
+
+The value is days, and `0` keeps that kind forever. A kind absent from the table
+is also kept forever, so a newer event kind cannot be deleted by an older
+configuration. The drain loop prunes once an hour and asks SQLite to return the
+freed pages to the database file, rather than leaving a file that only appears
+to ignore retention.
 
 ## Privacy
 
