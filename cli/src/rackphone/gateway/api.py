@@ -58,6 +58,8 @@ from rackphone.metrics.exposition import collect_unit_metrics, parse_samples
 STREAM_POLL_SECONDS = 2.0
 STREAM_BATCH_SIZE = 100
 SCREEN_HEARTBEAT_SECONDS = 10
+# Shared with the client, which branches on it; see relay_screen.
+SESSION_BUSY_REASON = "session_busy"
 
 LimitQuery = Annotated[int, Query(ge=1, le=MAX_QUERY_LIMIT)]
 KNOWN_SCOPES = frozenset({SCOPE_READ, SCOPE_CONTROL, SCOPE_ADMIN})
@@ -426,7 +428,16 @@ def create_app(  # noqa: C901, PLR0913, PLR0915, PLR0917
                 )
                 acquired = True
             except SessionBusy as exc:
-                await websocket.close(code=1008, reason=str(exc))
+                # A machine-readable prefix, not prose. The client tells "held
+                # by someone else" from "the network died" by this token, and a
+                # reworded sentence would silently turn one into the other
+                # without a single test noticing. Close reasons are capped at
+                # 123 bytes, so the holder is trimmed rather than risking a
+                # frame the peer rejects outright.
+                holder = exc.holder[:64]
+                await websocket.close(
+                    code=1008, reason=f"{SESSION_BUSY_REASON} {holder}"
+                )
                 return
             relay = ScreenRelay("127.0.0.1", int(session.local_port))
             await relay.open()

@@ -38,6 +38,7 @@ HTTP_UNAUTHORIZED = 401
 HTTP_FORBIDDEN = 403
 HTTP_LOCKED = 423
 HTTP_BAD_REQUEST = 400
+HTTP_WEBSOCKET_POLICY = 1008
 HTTP_NOT_FOUND = 404
 HTTP_BAD_GATEWAY = 502
 HTTP_CONFLICT = 409
@@ -699,7 +700,9 @@ def test_the_screen_socket_owns_its_session(
         monkeypatch.setattr(adb, "remove_forward", lambda *_a: None)
         app, login, auth_store = screen_app(populated_store, tmp_path, repo, manager)
         granted = login.log_in("admin", "right", "peer", "tablet", 1000)
+        other = login.log_in("admin", "right", "peer", "laptop", 1000)
         assert granted.tokens is not None
+        assert other.tokens is not None
         headers = {"Authorization": f"Bearer {granted.tokens.access}"}
 
         def released() -> bool:
@@ -723,6 +726,22 @@ def test_the_screen_socket_owns_its_session(
             ):
                 pass
             assert manager.get("lisa01") is None
+
+            # A second device is refused with a token the client branches on.
+            # The client tells "someone else has it" from "the network died"
+            # by this prefix, so it is asserted rather than left to prose.
+            with (
+                client.websocket_connect("/api/units/lisa01/screen", headers=headers),
+                pytest.raises(WebSocketDisconnect) as refused,
+                client.websocket_connect(
+                    "/api/units/lisa01/screen",
+                    headers={"Authorization": f"Bearer {other.tokens.access}"},
+                ),
+            ):
+                pass
+            assert refused.value.code == HTTP_WEBSOCKET_POLICY
+            assert refused.value.reason.startswith(api.SESSION_BUSY_REASON)
+            assert released()
         auth_store.close()
 
 

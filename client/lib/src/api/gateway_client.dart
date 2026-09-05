@@ -5,6 +5,7 @@ import 'package:http/http.dart' as http;
 
 import 'errors.dart';
 import 'models.dart';
+import '../screen/screen_socket.dart';
 
 typedef RefreshTokenProvider = Future<String?> Function();
 
@@ -41,6 +42,16 @@ abstract class GatewayApi {
   Future<UnitTelemetry> telemetry(String unit);
   Stream<GatewayEvent> stream();
   void close();
+}
+
+/// Screen transport access kept as an extension so lightweight [GatewayApi]
+/// test implementations do not acquire protocol or socket responsibilities.
+extension GatewayScreenApi on GatewayApi {
+  Future<ScreenSocket> screen(String unit) {
+    final gateway = this;
+    if (gateway is GatewayClient) return gateway.screen(unit);
+    throw UnsupportedError('This gateway does not provide screen transport.');
+  }
 }
 
 /// The real gateway implementation, with only the access token kept in
@@ -206,6 +217,15 @@ class GatewayClient implements GatewayApi {
     if (data.isNotEmpty) {
       yield GatewayEvent.fromJson(_jsonObject(data.join('\n')));
     }
+  }
+
+  /// Opens the unit's authenticated channel-framed screen transport.
+  Future<ScreenSocket> screen(String unit) {
+    final httpScheme = _baseUrl.scheme.toLowerCase();
+    final uri = _uri(
+      '/api/units/${Uri.encodeComponent(unit)}/screen',
+    ).replace(scheme: httpScheme == 'http' ? 'ws' : 'wss');
+    return ScreenSocket.connect(uri: uri, accessToken: _accessToken ?? '');
   }
 
   @override
