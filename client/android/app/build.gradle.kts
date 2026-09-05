@@ -12,6 +12,10 @@ android {
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
+        // flutter_local_notifications schedules against java.time, which API 26
+        // predates in part. Without this the build fails outright rather than
+        // degrading, so it is a requirement of that dependency, not a choice.
+        isCoreLibraryDesugaringEnabled = true
     }
 
     defaultConfig {
@@ -34,6 +38,15 @@ android {
             signingConfig = signingConfigs.getByName("debug")
         }
     }
+
+    testOptions {
+        unitTests.isReturnDefaultValues = true
+    }
+}
+
+dependencies {
+    coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.5")
+    testImplementation("junit:junit:4.13.2")
 }
 
 kotlin {
