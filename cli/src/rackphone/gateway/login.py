@@ -10,6 +10,7 @@ so a test can say what time it is.
 from __future__ import annotations
 
 import hmac
+from collections.abc import Callable
 from dataclasses import dataclass
 from enum import StrEnum
 
@@ -40,6 +41,7 @@ IP_FAILURE_WINDOW_SECONDS = 900
 # only attempts naming the real account reach it.
 ACCOUNT_FAILURE_THRESHOLD = 5
 ACCOUNT_FAILURE_WINDOW_SECONDS = 3600
+AlertCallback = Callable[[str, str], None]
 
 
 class RefusalReason(StrEnum):
@@ -78,15 +80,22 @@ class LoginOutcome:
 class LoginService:
     """Coordinate authentication primitives with persistent auth state."""
 
-    def __init__(self, config: GatewayConfig, store: AuthStore) -> None:
+    def __init__(
+        self,
+        config: GatewayConfig,
+        store: AuthStore,
+        alert: AlertCallback | None = None,
+    ) -> None:
         """Initialize the login policy service.
 
         Args:
             config: Gateway credentials and token lifetimes.
             store: Authentication state store.
+            alert: Optional sink for security alerts without secret values.
         """
         self.config = config
         self.store = store
+        self.alert = alert
         # Cache the signing key so request authorization never queries SQLite.
         self._access_key = store.access_key()
 
@@ -139,6 +148,11 @@ class LoginService:
                 username=self.config.admin.username,
             )
             if account_failures >= ACCOUNT_FAILURE_THRESHOLD:
+                if account_failures == ACCOUNT_FAILURE_THRESHOLD:
+                    self._alert(
+                        "failed_logins",
+                        "Five failed login attempts were made for the administrator.",
+                    )
                 lockout = next_lockout(
                     account_subject,
                     self.store.last_level(account_subject),
@@ -146,6 +160,10 @@ class LoginService:
                 )
                 self.store.lock(lockout)
                 locks.append(lockout)
+                self._alert(
+                    "account_lockout",
+                    "The Rackphone administrator account has been locked.",
+                )
 
         detail = f"reason={reason.value}"
         if locks:
@@ -154,6 +172,16 @@ class LoginService:
             now, "login_failed", actor=username, subject=ip, detail=detail
         )
         return self._refuse(reason)
+
+    def _alert(self, reason: str, message: str) -> None:
+        """Send a security alert when a sink is configured.
+
+        Args:
+            reason: Short machine-readable alert reason.
+            message: Human sentence containing no submitted credentials.
+        """
+        if self.alert is not None:
+            self.alert(reason, message)
 
     def log_in(  # noqa: PLR0913, PLR0917
         self,
@@ -223,6 +251,10 @@ class LoginService:
         self.store.record_attempt(ip, username, True, now)
         self.store.clear_lock(self._ip_subject(ip))
         self.store.clear_lock(self._account_subject(admin.username))
+        known_device = any(
+            session.device_label == device_label
+            for session in self.store.list_refresh()
+        )
         refresh = generate_token()
         refresh_id = self.store.issue_refresh(
             hash_token(refresh),
@@ -239,6 +271,11 @@ class LoginService:
             subject=device_label,
             detail=f"scope={scope}",
         )
+        if not known_device:
+            self._alert(
+                "new_device",
+                "A login succeeded from a device not seen before.",
+            )
         return LoginOutcome(tokens=tokens)
 
     def refresh(self, refresh_token: str, now: int) -> LoginOutcome:

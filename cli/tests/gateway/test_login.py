@@ -183,3 +183,46 @@ def test_audit_never_contains_secrets(
         outcome.tokens.access,
     ):
         assert value not in audit
+
+
+def test_new_device_alerts_once_without_carrying_secrets(tmp_path: Path) -> None:
+    alerts: list[tuple[str, str]] = []
+    store = AuthStore(tmp_path / "alerts.db")
+    password = "correct horse"
+    config = GatewayConfig(admin=AdminConfig("admin", hash_password(password)))
+    service = LoginService(
+        config, store, lambda reason, text: alerts.append((reason, text))
+    )
+    try:
+        first = service.log_in("admin", password, "192.0.2.1", password, 1_000)
+        second = service.log_in("admin", password, "192.0.2.2", password, 1_001)
+        assert first.tokens is not None and second.tokens is not None
+        assert [reason for reason, _text in alerts] == ["new_device"]
+        assert password not in repr(alerts)
+    finally:
+        store.close()
+
+
+def test_five_failures_alert_without_submitted_secrets(tmp_path: Path) -> None:
+    alerts: list[tuple[str, str]] = []
+    store = AuthStore(tmp_path / "failures.db")
+    config = GatewayConfig(admin=AdminConfig("admin", hash_password("right")))
+    service = LoginService(
+        config, store, lambda reason, text: alerts.append((reason, text))
+    )
+    try:
+        for offset in range(5):
+            service.log_in(
+                "admin",
+                "submitted secret",
+                f"192.0.2.{offset}",
+                "phone",
+                1_000 + offset,
+            )
+        assert {reason for reason, _text in alerts} == {
+            "failed_logins",
+            "account_lockout",
+        }
+        assert "submitted secret" not in repr(alerts)
+    finally:
+        store.close()

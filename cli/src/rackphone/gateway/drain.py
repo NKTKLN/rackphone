@@ -10,6 +10,8 @@ configured filters get the last word on whether one is worth a notification.
 from __future__ import annotations
 
 import threading
+import time
+from collections.abc import Callable
 from dataclasses import asdict, dataclass
 
 from rackphone import render, units
@@ -17,10 +19,12 @@ from rackphone.device import adb
 from rackphone.gateway.config import GatewayConfig
 from rackphone.gateway.filters import first_match
 from rackphone.gateway.notify import NtfyError, NtfyForwarder
+from rackphone.gateway.presence import ClientPresence
 from rackphone.gateway.store import Event, EventStore
 
 DRAIN_TIMEOUT_SECONDS = 60
 ACK_TIMEOUT_SECONDS = 30
+UNREACHABLE_ALERT_SECONDS = 60 * 60
 
 # The plugin that owns the spool on the device. It fronts the companion app,
 # which is what receives and sends; the CLI only needs to know the two action
@@ -36,6 +40,7 @@ class GatewayStats:
     drained: int = 0
     stored: int = 0
     filtered: int = 0
+    presence_skipped: int = 0
     pushed: int = 0
     push_failed: int = 0
     errors: int = 0
@@ -57,6 +62,8 @@ class MessageGateway:
         config: GatewayConfig,
         store: EventStore,
         forwarder: NtfyForwarder | None = None,
+        presence: ClientPresence | None = None,
+        clock: Callable[[], int] | None = None,
     ) -> None:
         """Prepare the gateway.
 
@@ -64,12 +71,19 @@ class MessageGateway:
             config: Poll interval and API settings.
             store: Where drained events are committed.
             forwarder: Notification sink, or None to store without pushing.
+            presence: Live client tracker, or None for an unwatched gateway.
+            clock: Current Unix time provider; defaults to the system clock.
         """
         self.config = config
         self.store = store
         self.forwarder = forwarder
+        self.presence = presence or ClientPresence()
+        self.clock = clock or (lambda: int(time.time()))
         self.stats = GatewayStats()
         self._stop_requested = threading.Event()
+        self._last_success: dict[str, int] = {}
+        self._outage_started: dict[str, int] = {}
+        self._outage_alerted: set[str] = set()
 
     def drain_unit(self, unit: units.Unit) -> int:
         """Drain one unit once.
@@ -126,7 +140,7 @@ class MessageGateway:
             unit_name: Unit the events came from, for the warning text.
             events: Events that were new to the store.
         """
-        if self.forwarder is None:
+        if self.forwarder is None or not self.config.ntfy.is_configured:
             return
         for event in events:
             rule = first_match(event, self.config.filters)
@@ -136,6 +150,9 @@ class MessageGateway:
                 # way an over-broad filter is ever noticed.
                 self.stats.filtered += 1
                 render.dim(f"{unit_name}: {event.kind} filtered by {rule.name!r}")
+                continue
+            if not self.config.ntfy.mirror and self.presence.is_watched(self.clock()):
+                self.stats.presence_skipped += 1
                 continue
             try:
                 if self.forwarder.send(event):
@@ -156,11 +173,41 @@ class MessageGateway:
         for unit in units.load_all_units():
             try:
                 total += self.drain_unit(unit)
+                self._last_success[unit.name] = self.clock()
+                self._outage_started.pop(unit.name, None)
+                self._outage_alerted.discard(unit.name)
             except Exception as exc:
                 # One unreachable unit must not stop the others being drained.
                 self.stats.errors += 1
                 render.warn(f"{unit.name}: {exc}")
+                self._record_outage(unit.name)
         return total
+
+    def _record_outage(self, unit_name: str) -> None:
+        """Alert once when one unit has been unreachable for an hour.
+
+        Args:
+            unit_name: Name of the unit whose drain failed.
+        """
+        now = self.clock()
+        since = self._last_success.get(unit_name)
+        if since is None:
+            since = self._outage_started.setdefault(unit_name, now)
+        if now - since < UNREACHABLE_ALERT_SECONDS:
+            return
+        if self.forwarder is None or unit_name in self._outage_alerted:
+            return
+        # A five-second repeat is not an alert; it is a denial of service
+        # against our own phone. Recovery clears this marker for the next outage.
+        self._outage_alerted.add(unit_name)
+        try:
+            self.forwarder.send_alert(
+                "unit_unreachable",
+                f"Rackphone unit {unit_name} has not answered for 60 minutes.",
+            )
+        except NtfyError as exc:
+            self.stats.push_failed += 1
+            render.warn(f"{unit_name}: ntfy alert failed: {exc}")
 
     def run_forever(self) -> None:
         """Drain every unit on the configured interval until stopped."""

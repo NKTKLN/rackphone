@@ -30,6 +30,7 @@ from rackphone.gateway.auth import (
 from rackphone.gateway.config import DEFAULT_TRUSTED_PROXIES, GatewayConfig
 from rackphone.gateway.drain import MessageGateway
 from rackphone.gateway.login import LoginService, RefusalReason, Tokens
+from rackphone.gateway.presence import ClientPresence
 from rackphone.gateway.store import (
     DEFAULT_QUERY_LIMIT,
     KIND_CALL,
@@ -133,6 +134,7 @@ def create_app(  # noqa: C901, PLR0915
     store: EventStore,
     login: LoginService,
     gateway: MessageGateway | None = None,
+    presence: ClientPresence | None = None,
 ) -> FastAPI:
     """Build the FastAPI application served by `rackphone gateway`.
 
@@ -141,11 +143,13 @@ def create_app(  # noqa: C901, PLR0915
         store: Event store to read from.
         login: Authentication policy service.
         gateway: Running drain loop whose counters are exposed by the API.
+        presence: Shared tracker for live event streams.
 
     Returns:
         FastAPI: The configured application.
     """
     legacy_enabled = bool(config.api_token and _is_loopback(config.api_host))
+    client_presence = presence or ClientPresence()
     if config.api_token and not legacy_enabled:
         # Removing this outright would break the running compose deployment;
         # honouring it on a public bind would leave a shared static secret
@@ -454,7 +458,12 @@ def create_app(  # noqa: C901, PLR0915
     async def stream_events() -> StreamingResponse:
         """Stream events stored after the connection opens."""
         return StreamingResponse(
-            iter_new_events(store, store.latest_event_id(), config),
+            iter_new_events(
+                store,
+                store.latest_event_id(),
+                config,
+                client_presence,
+            ),
             media_type="text/event-stream",
         )
 
@@ -465,6 +474,8 @@ async def iter_new_events(
     store: EventStore,
     last_seen_id: int,
     config: GatewayConfig | None = None,
+    presence: ClientPresence | None = None,
+    clock: Callable[[], int] = lambda: int(time.time()),
 ) -> AsyncIterator[str]:
     """Yield permitted stored rows above a starting id, oldest first.
 
@@ -472,24 +483,35 @@ async def iter_new_events(
         store: Event store to follow.
         last_seen_id: Highest row id the client has already seen.
         config: Capability policy, or None to permit every unit.
+        presence: Tracker to hold open while this iterator is live.
+        clock: Current Unix time provider; a test supplies its own.
 
     Yields:
         str: One server-sent `data:` frame per stored event.
     """
-    while True:
-        rows = [
-            row
-            for row in store.query_events(limit=STREAM_BATCH_SIZE)
-            if row["id"] > last_seen_id
-            and (
-                config is None
-                or (
-                    ("notifications" if row["kind"] == "notification" else "sms")
-                    in config.capabilities_for(row["unit"])
+    if presence is not None:
+        presence.opened()
+    try:
+        while True:
+            rows = [
+                row
+                for row in store.query_events(limit=STREAM_BATCH_SIZE)
+                if row["id"] > last_seen_id
+                and (
+                    config is None
+                    or (
+                        ("notifications" if row["kind"] == "notification" else "sms")
+                        in config.capabilities_for(row["unit"])
+                    )
                 )
-            )
-        ]
-        for row in reversed(rows):
-            last_seen_id = max(last_seen_id, row["id"])
-            yield f"data: {json.dumps(row, ensure_ascii=False)}\n\n"
-        await asyncio.sleep(STREAM_POLL_SECONDS)
+            ]
+            for row in reversed(rows):
+                last_seen_id = max(last_seen_id, row["id"])
+                yield f"data: {json.dumps(row, ensure_ascii=False)}\n\n"
+            await asyncio.sleep(STREAM_POLL_SECONDS)
+    finally:
+        # Nothing in here may raise. This runs when a client disconnects, and an
+        # exception would both hide why the stream ended and leave the gateway
+        # believing someone is still watching - which silences ntfy for good.
+        if presence is not None:
+            presence.closed(clock())

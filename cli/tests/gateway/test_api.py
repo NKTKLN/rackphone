@@ -8,8 +8,9 @@ from __future__ import annotations
 
 import asyncio
 import json
-from collections.abc import Iterator
+from collections.abc import AsyncGenerator, Iterator
 from pathlib import Path
+from typing import cast
 
 import pytest
 from conftest import EventFactory
@@ -22,6 +23,7 @@ from rackphone.gateway.authstore import AuthStore
 from rackphone.gateway.config import AdminConfig, GatewayConfig, NtfyConfig
 from rackphone.gateway.drain import MessageGateway
 from rackphone.gateway.login import LoginService
+from rackphone.gateway.presence import ClientPresence
 from rackphone.gateway.store import EventStore
 
 HTTP_OK = 200
@@ -532,3 +534,26 @@ class TestStream:
         frame = asyncio.run(read_first_frame())
         assert frame.startswith("data: ")
         assert json.loads(frame.removeprefix("data: "))["source_id"] == 1
+
+    def test_closing_the_stream_releases_presence(
+        self, populated_store: EventStore
+    ) -> None:
+        presence = ClientPresence()
+
+        async def open_and_close() -> None:
+            frames = cast(
+                AsyncGenerator[str],
+                iter_new_events(
+                    populated_store,
+                    last_seen_id=0,
+                    presence=presence,
+                    clock=lambda: 1_000,
+                ),
+            )
+            await anext(frames)
+            assert presence.is_watched(5_000) is True
+            await frames.aclose()
+
+        asyncio.run(open_and_close())
+        assert presence.is_watched(1_060) is True
+        assert presence.is_watched(1_061) is False
