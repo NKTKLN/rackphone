@@ -112,6 +112,19 @@ past every token. On the host network namespace the containers reach adb at
 unnecessary, and with them go the bridge address, the `FreeBind` workaround and
 the `extra_hosts` entry.
 
+### What the proxy has to pass through
+
+The limiter counts failures per address, so the gateway has to know which
+address. Caddy appends what it saw to `X-Forwarded-For`, and the gateway believes
+that header only from a peer listed in `trusted_proxies` — `127.0.0.1` and `::1`
+by default. Both halves matter: believing it from anyone lets a caller reset
+their own rate limit by inventing an address, and believing nobody makes every
+request appear to come from the proxy, so the first three failures lock out every
+client at once.
+
+It is the last hop that counts, not the first: a caller who sends a header of
+their own has it pushed leftwards when the proxy appends the address it saw.
+
 ## Authentication
 
 One administrator, a password, and tokens issued to devices.
@@ -126,18 +139,24 @@ One administrator, a password, and tokens issued to devices.
 
 `scrypt` rather than a plain digest because it is memory-hard: a leaked
 `gateway.toml` is then worth thousands of guesses a second, not billions. Every
-comparison — password, token, TOTP — uses `hmac.compare_digest`; the current
-check at `cli/src/rackphone/gateway/api.py:79` compares strings with `!=` and
-leaks its answer through timing.
+comparison — password, token, TOTP — uses `hmac.compare_digest`, and the
+password is verified even when the username is already wrong, so a bad name and
+a bad password cost the same time.
 
 The two-token split is what makes "log in once" and "revoke instantly" both
 true. The refresh token is the thing a phone keeps; the access token is what
 signs requests, and it expires on its own, so a revoked device stops working
 within fifteen minutes without a database lookup on every video frame.
 
-`cli/src/rackphone/gateway/api.py:77` returns early when no token is configured,
-which is safe only while the bind is loopback. Once it is not, a missing
-credential must refuse to start rather than serve openly.
+A login asks for the scope it wants and gets no more. The default is `control`,
+not `admin`: the app needs the screen and the send route, not the action log, and
+a device that asked for less is one less thing to regret when it is lost.
+
+The `api_token` that predates all of this still works, but only while the API
+binds loopback. Removing it would break the running compose deployment, and
+honouring it on a public bind would leave a shared static secret standing beside
+the whole scheme — so on a public bind it is ignored, and the gateway says so at
+startup. With no credential at all, a non-loopback bind refuses to start.
 
 ### Brute force
 
@@ -378,6 +397,11 @@ the cable it came from.
 | SMS | Send to a number |
 | Screen | The session |
 
+`/health` stays open so a probe still works, and carries nothing worth reading:
+status, version, and whether ntfy and TOTP are on. The counters moved to
+`GET /api/stats` behind `read` scope — an unauthenticated endpoint sitting behind
+a public proxy has no business reporting how many messages arrived.
+
 The first page needs no Prometheus. Current values come straight off the phone —
 `cli/src/rackphone/metrics/exposition.py:3`, one USB round trip for a whole
 exposition — and counts come from the store, which `/health` already reports.
@@ -434,7 +458,10 @@ Each step is useful on its own, and each is safe to stop after.
    and it makes what is already written safe to expose.
 2. **The client, read-only.** Login, unit switcher, data page, feed, SSE in a
    foreground service. No device work at all — it reads routes that already
-   exist, and it already delivers the phone's messages to your pocket.
+   exist, and it already delivers the phone's messages to your pocket. It lives
+   in `client/`, beside `app/` and `cli/`: a separate repository would put the
+   document, the protocol and the client that speaks it in different places, and
+   all three move together.
 3. **Notifications on the device.** The listener service, `mode = "allow"`,
    retention. The feed from step 2 becomes complete.
 4. **Sending.** Wiring `POST /api/messages` to the companion path. Small, and it
@@ -448,8 +475,10 @@ Each step is useful on its own, and each is safe to stop after.
 | Claim | Where to look |
 | --- | --- |
 | The container is a client, the adb server is on the host | `cli/src/rackphone/device/adb.py:62` |
-| The token comparison is not constant-time | `cli/src/rackphone/gateway/api.py:79` |
-| No token configured means no authentication | `cli/src/rackphone/gateway/api.py:77` |
+| Passwords, TOTP and token signing | `cli/src/rackphone/gateway/auth.py` |
+| Refresh tokens, lockouts and the action log | `cli/src/rackphone/gateway/authstore.py` |
+| Who is let in, and for how long | `cli/src/rackphone/gateway/login.py` |
+| Scopes, capabilities and the routes | `cli/src/rackphone/gateway/api.py` |
 | The send route is reserved and returns 501 | `cli/src/rackphone/gateway/api.py:162` |
 | The event stream the client follows | `cli/src/rackphone/gateway/api.py:176` |
 | A filter suppresses the push, never the record | `cli/src/rackphone/gateway/filters.py:3` |
