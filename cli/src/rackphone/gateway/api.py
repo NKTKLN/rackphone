@@ -20,7 +20,7 @@ from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request, Res
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
-from rackphone import __version__, render
+from rackphone import __version__, render, units
 from rackphone.gateway.auth import (
     SCOPE_ADMIN,
     SCOPE_CONTROL,
@@ -234,6 +234,25 @@ def create_app(  # noqa: C901, PLR0915
             "ntfy": "enabled" if config.ntfy.is_configured else "disabled",
             "totp": "enabled" if login.store.totp_secret() else "disabled",
         }
+
+    @app.get("/api/units", dependencies=read_auth)
+    def read_units() -> list[dict[str, Any]]:
+        """List the units and what this gateway allows to be done with them.
+
+        Returns:
+            list[dict[str, Any]]: Each unit with its label and capabilities.
+        """
+        # The client cannot build a unit switcher from the event feed: a phone
+        # that has received nothing appears nowhere in it, and capabilities are
+        # a host-side decision the client has no other way to learn.
+        return [
+            {
+                "name": unit.name,
+                "label": unit.label or unit.name,
+                "capabilities": sorted(config.capabilities_for(unit.name)),
+            }
+            for unit in units.load_all_units()
+        ]
 
     @app.get("/api/stats", dependencies=read_auth)
     def read_stats() -> dict[str, Any]:

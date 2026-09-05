@@ -359,6 +359,32 @@ class TestCapabilities:
         auth_store.close()
 
 
+def test_units_are_listed_with_their_capabilities(
+    populated_store: EventStore, tmp_path: Path, repo: Path
+) -> None:
+    # A phone that has received nothing appears nowhere in the event feed, so
+    # the switcher cannot be built from it.
+    (repo / "units" / "lisa01.env").write_text("unit.label=Front rack\n")
+    (repo / "units" / "lisa02.env").write_text("")
+    config = GatewayConfig(
+        api_token="legacy",
+        unit_capabilities={"lisa02": frozenset({"sms"})},
+    )
+    auth_store = AuthStore(tmp_path / "auth.db")
+    with TestClient(
+        create_app(config, populated_store, LoginService(config, auth_store))
+    ) as client:
+        rows = client.get(
+            "/api/units", headers={"Authorization": "Bearer legacy"}
+        ).json()
+    assert [row["name"] for row in rows] == ["lisa01", "lisa02"]
+    assert rows[0]["label"] == "Front rack"
+    # Undeclared means every capability; declared means exactly what was said.
+    assert rows[0]["capabilities"] == ["files", "notifications", "screen", "sms"]
+    assert rows[1]["capabilities"] == ["sms"]
+    auth_store.close()
+
+
 def test_client_ip_uses_only_a_trusted_peer() -> None:
     trusted = ["proxy"]
     # The proxy appends what it saw, so an address the caller invented ends up
