@@ -15,7 +15,15 @@ echo "app=installed"
 echo "ready=$(app_status_value ready)"
 echo "pending=$(app_status_value pending)"
 echo "dropped=$(app_status_value dropped)"
-echo "collecting=sms:$(app_status_value collect_sms),calls:$(app_status_value collect_calls)"
+echo "collecting=sms:$(app_status_value collect_sms),calls:$(app_status_value collect_calls),notifications:$(app_status_value collect_notifications)"
+# `settings get` reads a documented key with a stable format. dumpsys would need
+# its debug output parsed, which is what this project stopped doing for SMS - and
+# --noredact would print notification bodies into a status path besides.
+LISTENER=com.nktkln.rackphone.companion/com.nktkln.rackphone.companion.NotificationCollector
+case ":$(settings get secure enabled_notification_listeners 2>/dev/null):" in
+  *":$LISTENER:"*) echo "listener=granted" ;;
+  *) echo "listener=withheld" ;;
+esac
 echo "keepalive=$(app_status_value keepalive_enabled)"
 # Without the battery exemption the system defers this app's alarms by up to a
 # year, so the schedule below would be a plan nobody executes.

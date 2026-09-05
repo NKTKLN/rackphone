@@ -168,6 +168,7 @@ class CommandReceiver : BroadcastReceiver() {
         int(intent, Commands.EXTRA_SUB)?.let { config.subId = it }
         bool(intent, Commands.EXTRA_COLLECT_SMS)?.let { config.collectSms = it }
         bool(intent, Commands.EXTRA_COLLECT_CALLS)?.let { config.collectCalls = it }
+        bool(intent, "collect_notifications")?.let { config.collectNotifications = it }
         bool(intent, Commands.EXTRA_INCLUDE_BODY)?.let { config.includeBody = it }
         int(intent, Commands.EXTRA_INBOX_CAP)?.let { config.inboxCap = it }
         string(intent, Commands.EXTRA_BALANCE_CODE)?.let { config.balanceCode = it }

@@ -18,6 +18,13 @@
       "help": "Missed and answered. The app sees the phone state rather than the call log, so a rejected call is reported as missed - on an unattended unit the actionable fact is the same."
     },
     {
+      "key": "collect_notifications",
+      "type": "bool",
+      "default": "0",
+      "label": "Collect app notifications",
+      "help": "Copies arbitrary third-party notification content off the device. Off by default because only the operator can decide whether that privacy cost is acceptable."
+    },
+    {
       "key": "include_body",
       "type": "bool",
       "default": "1",
@@ -138,6 +145,7 @@
     "pending",
     "dropped",
     "collecting",
+    "listener",
     "alarms",
     "keepalive",
     "next_due",

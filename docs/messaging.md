@@ -151,6 +151,7 @@ Device settings, through the normal plugin contract:
 | --- | --- | --- |
 | `companion.collect_sms` | `1` | Arriving messages; sent ones are never relayed |
 | `companion.collect_calls` | `1` | Missed and answered incoming |
+| `companion.collect_notifications` | `0` | App notifications; deliberately off because they may contain arbitrary third-party content |
 | `companion.include_body` | `1` | Off relays sender and time only |
 | `companion.inbox_cap` | `2000` | Oldest dropped past this, and counted |
 | `companion.keepalive_enabled` | `0` | Off by default: it spends money on a SIM whose terms only you know |
@@ -361,7 +362,8 @@ This pipes message content off the phone into a host database and onward to
 ntfy. Three controls:
 
 - `include_body=0` — the host learns that a message arrived, from whom and
-  when, without the content ever leaving the device.
+  when, without the content ever leaving the device. For app notifications it
+  still receives the package, app label, title and time, but not the text.
 - Incoming-only — the app is handed arriving messages by the system and never
   reads the inbox, so messages the unit sent, and calls it made, are not visible
   to it at all.
@@ -373,10 +375,18 @@ ntfy. Three controls:
 
 App notification mirroring **is** implemented, and it is the loosest of these
 controls: it copies arbitrary third-party content off the device. Two things
-narrow it. Pushes default to silence — a notification reaches the store and goes
+narrow it. `collect_notifications=0` is the device default; when enabled, the
+listener records the sending package, app label, title, text and post time in
+the common spool, skipping ongoing notifications, group summaries and unchanged
+reposts. Pushes default to silence — a notification reaches the store and goes
 no further until an `allow` rule names its package — and the store forgets
 notifications after thirty days, while SMS and calls are kept. See
 [remote-access.md](remote-access.md).
+
+There is nobody at the rack to approve a notification listener in Settings, so
+the companion plugin grants it from root when collection is enabled and revokes
+it when collection is disabled. `rackphone status` reports whether the listener
+is actually bound, not merely whether the setting asks for it.
 
 An ntfy topic is a shared secret, not an access control. Anyone who knows the
 topic name can read it unless the server enforces auth on read.

@@ -19,6 +19,7 @@ app_installed || { echo "app not installed"; exit 0; }
 app_cmd CONFIG \
   --es collect_sms              "$(cfg collect_sms)" \
   --es collect_calls            "$(cfg collect_calls)" \
+  --es collect_notifications    "$(cfg collect_notifications)" \
   --es include_body             "$(cfg include_body)" \
   --es inbox_cap                "$(cfg inbox_cap)" \
   --es keepalive_enabled        "$(cfg keepalive_enabled)" \
@@ -29,3 +30,10 @@ app_cmd CONFIG \
   --es balance_code             "$(cfg balance_code)" \
   --es balance_interval_hours   "$(cfg balance_interval_hours)" \
   >/dev/null 2>&1
+
+LISTENER=com.nktkln.rackphone.companion/com.nktkln.rackphone.companion.NotificationCollector
+if [ "$(cfg collect_notifications)" = 1 ]; then
+  cmd notification allow_listener "$LISTENER" >/dev/null 2>&1
+else
+  cmd notification disallow_listener "$LISTENER" >/dev/null 2>&1
+fi
