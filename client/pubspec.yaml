@@ -1,0 +1,30 @@
+name: rackphone_client
+description: >
+  The operator's end of a Rackphone rack: logs in to the gateway, shows what
+  arrived on each unit, and - later - puts the phone's screen on your own.
+publish_to: 'none'
+
+# Matches the module versions in modules/*/module.prop.
+version: 0.1.0+1
+
+environment:
+  sdk: ^3.12.2
+
+dependencies:
+  flutter:
+    sdk: flutter
+  # Streamed responses, which the event stream needs; the rest is plain requests.
+  http: ^1.5.0
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^6.0.0
+
+# The companion app next door takes no third-party packages at all, and that is
+# right for an APK whose whole job is a dozen lines of SmsManager. It does not
+# travel here: this app needs a hardware H.264 decoder, a keystore-backed store
+# and a foreground service, and writing those by hand is not restraint. The rule
+# instead is that a dependency has to earn its place against what it replaces.
+flutter:
+  uses-material-design: true

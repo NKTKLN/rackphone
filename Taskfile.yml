@@ -5,6 +5,7 @@ version: '3'
 vars:
   CLI_DIR: cli
   APP_DIR: app
+  CLIENT_DIR: client
 
 tasks:
   # ======== Environment ========
@@ -201,6 +202,31 @@ tasks:
   app-build:
     desc: Build the companion APK
     dir: '{{.APP_DIR}}'
+    cmds:
+      - flutter build apk --release
+
+  client-deps:
+    desc: Resolve the client app's Dart dependencies
+    dir: '{{.CLIENT_DIR}}'
+    cmds:
+      - flutter pub get
+
+  client-lint:
+    desc: Analyse and format-check the client app
+    dir: '{{.CLIENT_DIR}}'
+    cmds:
+      - dart format --output=none --set-exit-if-changed .
+      - flutter analyze
+
+  client-test:
+    desc: Run the client app's Dart tests
+    dir: '{{.CLIENT_DIR}}'
+    cmds:
+      - flutter test
+
+  client-build:
+    desc: Build the client APK
+    dir: '{{.CLIENT_DIR}}'
     cmds:
       - flutter build apk --release
 
