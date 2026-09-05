@@ -11,7 +11,12 @@ from pathlib import Path
 
 import pytest
 
-from rackphone.gateway.config import GatewayConfig, GatewayConfigError, NtfyConfig
+from rackphone.gateway.config import (
+    GatewayConfig,
+    GatewayConfigError,
+    NtfyConfig,
+    is_loopback,
+)
 
 
 class TestLoading:
@@ -177,3 +182,21 @@ def test_zero_token_lifetime_is_refused(tmp_path: Path) -> None:
         GatewayConfigError, match=r"access_ttl_seconds must be positive"
     ):
         GatewayConfig.load(config_file)
+
+
+def test_the_whole_loopback_range_counts_as_loopback(tmp_path: Path) -> None:
+    # Two implementations of this used to disagree about 127.0.0.2: the config
+    # called it public and refused to start, while the API called it loopback
+    # and honoured the legacy shared token on it.
+    assert is_loopback("127.0.0.1")
+    assert is_loopback("127.0.0.2")
+    assert is_loopback("::1")
+    assert is_loopback("localhost")
+    assert not is_loopback("0.0.0.0")  # noqa: S104 - asserted, not bound
+    assert not is_loopback("192.168.1.10")
+    assert not is_loopback("example.test")
+
+    config_file = tmp_path / "gateway.toml"
+    config_file.write_text('[gateway]\napi_host="127.0.0.2"\n')
+    # And so a bind there no longer demands an administrator credential.
+    assert GatewayConfig.load(config_file).api_host == "127.0.0.2"

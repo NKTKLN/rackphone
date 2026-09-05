@@ -13,6 +13,7 @@ import base64
 import os
 import tomllib
 from dataclasses import dataclass, field
+from ipaddress import ip_address
 from pathlib import Path
 from typing import Any
 
@@ -33,6 +34,26 @@ VALID_CAPABILITIES = frozenset({"sms", "notifications", "screen", "files"})
 
 class GatewayConfigError(ValueError):
     """Configuration that would make the gateway unsafe or destructive."""
+
+
+def is_loopback(host: str) -> bool:
+    """Check whether a bind address is reachable only from this machine.
+
+    Args:
+        host: Address the API is bound to.
+
+    Returns:
+        bool: Whether the whole of 127.0.0.0/8, ::1, or the name `localhost`.
+    """
+    # One definition, used both by the refusal to start without a credential
+    # and by the legacy token's loopback restriction. Two implementations
+    # disagreed about 127.0.0.2 - and the looser one guarded the weaker secret.
+    if host == "localhost":
+        return True
+    try:
+        return ip_address(host).is_loopback
+    except ValueError:
+        return False
 
 
 def get_config_path() -> Path:
@@ -337,10 +358,7 @@ class GatewayConfig:
                 raise GatewayConfigError(
                     f"{name} must be positive, not {seconds}; refusing to start"
                 )
-        if (
-            config.api_host not in {"127.0.0.1", "::1", "localhost"}
-            and not config.admin.is_configured
-        ):
+        if not is_loopback(config.api_host) and not config.admin.is_configured:
             raise GatewayConfigError(
                 "set both admin username and password_hash before binding "
                 "the API beyond loopback; refusing to start"

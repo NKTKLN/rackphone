@@ -14,7 +14,6 @@ import time
 from collections.abc import AsyncIterator, Callable, Iterable
 from dataclasses import asdict
 from http import HTTPStatus
-from ipaddress import ip_address
 from typing import Annotated, Any
 
 from fastapi import (
@@ -38,7 +37,11 @@ from rackphone.gateway.auth import (
     AccessClaims,
     verify_password,
 )
-from rackphone.gateway.config import DEFAULT_TRUSTED_PROXIES, GatewayConfig
+from rackphone.gateway.config import (
+    DEFAULT_TRUSTED_PROXIES,
+    GatewayConfig,
+    is_loopback,
+)
 from rackphone.gateway.drain import MessageGateway
 from rackphone.gateway.login import LoginService, RefusalReason, Tokens
 from rackphone.gateway.presence import ClientPresence
@@ -124,17 +127,55 @@ def client_ip(
     return peer
 
 
-def _is_loopback(host: str) -> bool:
-    if host == "localhost":
-        return True
-    try:
-        return ip_address(host).is_loopback
-    except ValueError:
-        return False
+def bearer_token(authorization: str) -> str:
+    """Extract the token from an Authorization header.
+
+    Args:
+        authorization: Raw header value, which may be absent or malformed.
+
+    Returns:
+        str: The token, or an empty string when the header is not a bearer.
+    """
+    prefix = "Bearer "
+    if not authorization.startswith(prefix):
+        return ""
+    return authorization.removeprefix(prefix)
 
 
-def _capability_for(kind: str) -> str:
+def capability_for(kind: str) -> str:
+    """Return the unit capability that governs one event kind.
+
+    Args:
+        kind: Stored event kind.
+
+    Returns:
+        str: The capability a unit must hold for this kind to be readable.
+    """
     return "notifications" if kind == KIND_NOTIFICATION else "sms"
+
+
+def readable_rows(
+    rows: list[dict[str, Any]], config: GatewayConfig | None
+) -> list[dict[str, Any]]:
+    """Drop rows whose unit is not permitted to report their kind.
+
+    Args:
+        rows: Stored event rows, in any order.
+        config: Capability policy, or None to permit every unit.
+
+    Returns:
+        list[dict[str, Any]]: The rows a reader is allowed to see.
+    """
+    # One copy of this rule. It decides what a reader may see, and it is applied
+    # both to a query and to the live stream - two copies of a rule like that
+    # drift, and the drift is silent in exactly the direction that matters.
+    if config is None:
+        return rows
+    return [
+        row
+        for row in rows
+        if capability_for(row["kind"]) in config.capabilities_for(row["unit"])
+    ]
 
 
 def _tokens_body(tokens: Tokens) -> dict[str, str | int]:
@@ -168,7 +209,7 @@ def create_app(  # noqa: C901, PLR0913, PLR0915, PLR0917
     Returns:
         FastAPI: The configured application.
     """
-    legacy_enabled = bool(config.api_token and _is_loopback(config.api_host))
+    legacy_enabled = bool(config.api_token and is_loopback(config.api_host))
     client_presence = presence or ClientPresence()
     screen_sessions = sessions or SessionManager()
     if config.api_token and not legacy_enabled:
@@ -194,12 +235,7 @@ def create_app(  # noqa: C901, PLR0913, PLR0915, PLR0917
         """
 
         def require(authorization: Annotated[str, Header()] = "") -> None:
-            prefix = "Bearer "
-            token = (
-                authorization.removeprefix(prefix)
-                if authorization.startswith(prefix)
-                else ""
-            )
+            token = bearer_token(authorization)
             if login.authorise(token, int(time.time()), scope) is not None:
                 return
             if legacy_enabled and hmac.compare_digest(token, config.api_token):
@@ -221,12 +257,7 @@ def create_app(  # noqa: C901, PLR0913, PLR0915, PLR0917
         # FastAPI would evaluate that string against module globals, fail to
         # find this closure, and quietly treat `holder` as a query parameter -
         # letting any caller name itself the session's owner.
-        prefix = "Bearer "
-        token = (
-            authorization.removeprefix(prefix)
-            if authorization.startswith(prefix)
-            else ""
-        )
+        token = bearer_token(authorization)
         claims: AccessClaims | None = login.authorise(
             token, int(time.time()), SCOPE_CONTROL
         )
@@ -289,16 +320,14 @@ def create_app(  # noqa: C901, PLR0913, PLR0915, PLR0917
         # enough to see something: demanding `sms` here would refuse a unit that
         # is allowed to report notifications and nothing else.
         required = (
-            {_capability_for(kind)} if kind is not None else {"sms", "notifications"}
+            {capability_for(kind)} if kind is not None else {"sms", "notifications"}
         )
         if unit is not None and not required & config.capabilities_for(unit):
             raise HTTPException(HTTPStatus.FORBIDDEN, "unit capability denied")
-        rows = store.query_events(kind=kind, unit=unit, since=since, limit=limit)
-        return [
-            row
-            for row in rows
-            if _capability_for(row["kind"]) in config.capabilities_for(row["unit"])
-        ]
+        return readable_rows(
+            store.query_events(kind=kind, unit=unit, since=since, limit=limit),
+            config,
+        )
 
     @app.get("/health")
     def read_health() -> dict[str, str]:
@@ -700,18 +729,14 @@ async def iter_new_events(
         presence.opened()
     try:
         while True:
-            rows = [
-                row
-                for row in store.query_events(limit=STREAM_BATCH_SIZE)
-                if row["id"] > last_seen_id
-                and (
-                    config is None
-                    or (
-                        ("notifications" if row["kind"] == "notification" else "sms")
-                        in config.capabilities_for(row["unit"])
-                    )
-                )
-            ]
+            rows = readable_rows(
+                [
+                    row
+                    for row in store.query_events(limit=STREAM_BATCH_SIZE)
+                    if row["id"] > last_seen_id
+                ],
+                config,
+            )
             for row in reversed(rows):
                 last_seen_id = max(last_seen_id, row["id"])
                 yield f"data: {json.dumps(row, ensure_ascii=False)}\n\n"
