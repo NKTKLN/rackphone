@@ -30,6 +30,16 @@ case "${1:-}" in
       exit 1
     fi
     ;;
+  # Takes arguments, unlike every action above it: the destination and the
+  # text. Both are passed as extras rather than interpolated into a command,
+  # so a body containing a quote is a body and not a second command.
+  send)
+    if [ $# -lt 3 ]; then
+      echo "send needs a destination and a body" >&2
+      exit 2
+    fi
+    app_cmd SEND --es to "$2" --es body "$3"
+    ;;
   keepalive) app_cmd KEEPALIVE --es force true ;;
   # The reply waits on the network, so this one is slower than the others by
   # design - the operator answers a USSD session in seconds, not instantly.

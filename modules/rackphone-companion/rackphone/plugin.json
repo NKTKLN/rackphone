@@ -127,6 +127,10 @@
       "label": "Issue the control token"
     },
     {
+      "id": "send",
+      "label": "Send one message"
+    },
+    {
       "id": "keepalive",
       "label": "Send the keepalive now"
     },

@@ -31,6 +31,7 @@ from rackphone.gateway.config import DEFAULT_TRUSTED_PROXIES, GatewayConfig
 from rackphone.gateway.drain import MessageGateway
 from rackphone.gateway.login import LoginService, RefusalReason, Tokens
 from rackphone.gateway.presence import ClientPresence
+from rackphone.gateway.send import SendError, send_sms
 from rackphone.gateway.store import (
     DEFAULT_QUERY_LIMIT,
     KIND_CALL,
@@ -43,13 +44,6 @@ from rackphone.metrics.exposition import collect_unit_metrics, parse_samples
 
 STREAM_POLL_SECONDS = 2.0
 STREAM_BATCH_SIZE = 100
-
-SEND_NOT_IMPLEMENTED = (
-    "Sending is not wired up here yet. The device path exists - the companion "
-    "app holds SEND_SMS and is driven by broadcasts - but this route does not "
-    "reach it. Until it does, send with `rackphone action companion keepalive` "
-    "or the SEND broadcast. See docs/messaging.md."
-)
 
 LimitQuery = Annotated[int, Query(ge=1, le=MAX_QUERY_LIMIT)]
 KNOWN_SCOPES = frozenset({SCOPE_READ, SCOPE_CONTROL, SCOPE_ADMIN})
@@ -79,6 +73,14 @@ class PasswordBody(BaseModel):
     """Administrator password required for a sensitive change."""
 
     password: str
+
+
+class SendBody(BaseModel):
+    """One outbound SMS request."""
+
+    unit: str
+    to: str
+    body: str
 
 
 def client_ip(
@@ -445,14 +447,26 @@ def create_app(  # noqa: C901, PLR0915
         """
         return permitted_rows(KIND_CALL, unit, since, limit)
 
-    @app.post(
-        "/api/messages",
-        status_code=HTTPStatus.NOT_IMPLEMENTED,
-        dependencies=control_auth,
-    )
-    def send_message() -> dict[str, str]:
-        """Reserve the authenticated send route until its path exists."""
-        raise HTTPException(HTTPStatus.NOT_IMPLEMENTED, SEND_NOT_IMPLEMENTED)
+    @app.post("/api/messages", dependencies=control_auth)
+    def send_message(body: SendBody) -> dict[str, Any]:
+        """Send one SMS through a unit authorised for messaging."""
+        if not any(item.name == body.unit for item in units.load_all_units()):
+            raise HTTPException(HTTPStatus.NOT_FOUND, "unknown unit")
+        if "sms" not in config.capabilities_for(body.unit):
+            raise HTTPException(HTTPStatus.FORBIDDEN, "unit capability denied")
+        try:
+            answer = send_sms(body.unit, body.to, body.body)
+        except SendError as exc:
+            status = (
+                HTTPStatus.BAD_GATEWAY if exc.device_failure else HTTPStatus.BAD_REQUEST
+            )
+            raise HTTPException(status, str(exc)) from exc
+        # An outbound message is billable and externally visible. Audit the
+        # target, but never its content: the action log must not copy outbox data.
+        login.store.record_audit(
+            int(time.time()), "send_sms", subject=body.unit, detail=f"to={body.to}"
+        )
+        return answer
 
     @app.get("/api/stream", dependencies=read_auth)
     async def stream_events() -> StreamingResponse:

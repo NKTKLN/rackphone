@@ -89,8 +89,15 @@ uv run --project cli rackphone action companion keepalive   # prove the path
 ```
 
 Arbitrary sends go through the app's `SEND` broadcast, which the host reaches
-over adb. `POST /api/messages` still returns **501**: the device path exists now,
-but the route that would drive it from the API is not wired up yet.
+over adb. `POST /api/messages` accepts `{unit, to, body}` with a `control` token
+and sends through that unit's companion plugin. The unit must have the `sms`
+capability. A successful request returns the device's outbox record, including
+whether it was accepted and its record id. Invalid destinations and empty bodies
+return 400, unknown units return 404, and an unreachable or refusing phone
+returns 502.
+
+Each send records the unit and destination in the audit log. Message content is
+never included there, so the audit log does not become another outbox.
 
 See [the app's README](../app/README.md) for the broadcast surface, including the
 quoting trap that silently truncates a multi-word body.

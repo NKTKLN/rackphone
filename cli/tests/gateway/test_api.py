@@ -31,8 +31,8 @@ HTTP_UNAUTHORIZED = 401
 HTTP_FORBIDDEN = 403
 HTTP_LOCKED = 423
 HTTP_BAD_REQUEST = 400
-HTTP_NOT_IMPLEMENTED = 501
 HTTP_NOT_FOUND = 404
+HTTP_BAD_GATEWAY = 502
 
 
 @pytest.fixture
@@ -107,10 +107,118 @@ class TestQueries:
 
 
 class TestSending:
-    def test_send_is_reserved_and_explains_itself(self, client: TestClient) -> None:
-        response = client.post("/api/messages")
-        assert response.status_code == HTTP_NOT_IMPLEMENTED
-        assert "SEND_SMS" in response.json()["detail"]
+    def test_send_returns_device_answer_and_audits_no_body(
+        self,
+        populated_store: EventStore,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        config = GatewayConfig(api_token="legacy")
+        auth_store = AuthStore(tmp_path / "auth.db")
+        monkeypatch.setattr(
+            api.units,
+            "load_all_units",
+            lambda: [api.units.Unit("lisa01", tmp_path / "unit")],
+        )
+
+        def succeed(unit: str, to: str, body: str) -> dict[str, object]:
+            assert (unit, to, body) == ("lisa01", "+7900", "do not audit this")
+            return {"accepted": True, "id": "out-1"}
+
+        monkeypatch.setattr(api, "send_sms", succeed)
+        secret_body = "do not audit this"
+        with TestClient(
+            create_app(config, populated_store, LoginService(config, auth_store))
+        ) as client:
+            response = client.post(
+                "/api/messages",
+                json={"unit": "lisa01", "to": "+7900", "body": secret_body},
+                headers={"Authorization": "Bearer legacy"},
+            )
+        assert response.status_code == HTTP_OK
+        assert response.json() == {"accepted": True, "id": "out-1"}
+        audit = auth_store.query_audit()
+        assert audit[0]["subject"] == "lisa01"
+        assert "+7900" in audit[0]["detail"]
+        assert secret_body not in repr(audit)
+        auth_store.close()
+
+    def test_unknown_unit_is_not_found(
+        self,
+        populated_store: EventStore,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        config = GatewayConfig(api_token="legacy")
+        auth_store = AuthStore(tmp_path / "auth.db")
+        monkeypatch.setattr(api.units, "load_all_units", lambda: [])
+        monkeypatch.setattr(api, "send_sms", lambda *_args: pytest.fail("sent"))
+        with TestClient(
+            create_app(config, populated_store, LoginService(config, auth_store))
+        ) as client:
+            response = client.post(
+                "/api/messages",
+                json={"unit": "lisa01", "to": "+7900", "body": "hello"},
+                headers={"Authorization": "Bearer legacy"},
+            )
+        assert response.status_code == HTTP_NOT_FOUND
+        auth_store.close()
+
+    def test_unit_without_sms_capability_is_forbidden(
+        self,
+        populated_store: EventStore,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        config = GatewayConfig(
+            api_token="legacy",
+            unit_capabilities={"lisa01": frozenset({"screen"})},
+        )
+        auth_store = AuthStore(tmp_path / "auth.db")
+        found = [api.units.Unit("lisa01", tmp_path / "unit")]
+        monkeypatch.setattr(api.units, "load_all_units", lambda: found)
+        monkeypatch.setattr(api, "send_sms", lambda *_args: pytest.fail("sent"))
+        with TestClient(
+            create_app(config, populated_store, LoginService(config, auth_store))
+        ) as client:
+            response = client.post(
+                "/api/messages",
+                json={"unit": "lisa01", "to": "+7900", "body": "hello"},
+                headers={"Authorization": "Bearer legacy"},
+            )
+        assert response.status_code == HTTP_FORBIDDEN
+        auth_store.close()
+
+    def test_device_failure_becomes_bad_gateway(
+        self,
+        populated_store: EventStore,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        config = GatewayConfig(api_token="legacy")
+        auth_store = AuthStore(tmp_path / "auth.db")
+        monkeypatch.setattr(
+            api.units,
+            "load_all_units",
+            lambda: [api.units.Unit("lisa01", tmp_path / "unit")],
+        )
+
+        def fail(_unit: str, _to: str, _body: str) -> dict[str, object]:
+            error = api.SendError("phone unavailable")
+            error.device_failure = True
+            raise error
+
+        monkeypatch.setattr(api, "send_sms", fail)
+        with TestClient(
+            create_app(config, populated_store, LoginService(config, auth_store))
+        ) as client:
+            response = client.post(
+                "/api/messages",
+                json={"unit": "lisa01", "to": "+7900", "body": "hello"},
+                headers={"Authorization": "Bearer legacy"},
+            )
+        assert response.status_code == HTTP_BAD_GATEWAY
+        auth_store.close()
 
 
 class TestAuth:

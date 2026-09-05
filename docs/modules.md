@@ -17,7 +17,7 @@ read `battery.max_percent` rather than repeating the namespace.
 | `rackphone/defaults.env` | yes | `key=value`, generated from `plugin.json` |
 | `rackphone/metrics.sh` | no | Prometheus exposition on stdout |
 | `rackphone/status.sh` | no | `key=value` lines on stdout |
-| `rackphone/action.sh` | no | Called as `action.sh <action-id>` |
+| `rackphone/action.sh` | no | Called as `action.sh <action-id> [args…]` |
 | `rackphone/reload.sh` | no | Called after `rackphone set` touches this plugin |
 
 `defaults.env` is generated rather than hand-written. The CLI validates against
@@ -58,6 +58,12 @@ visible only on a device with no config deployed.
 | `depends_on` | any | Another key that gates this one |
 
 `status` lists the keys `status.sh` may emit, in the order the CLI shows them.
+
+Most actions take nothing but their id. One that does take arguments - the
+companion's `send` wants a destination and a text - receives them after the id,
+and must pass them on as arguments rather than folding them into a command
+string: a message body is arbitrary text, and text that reaches a shell as code
+is the oldest bug there is.
 
 ## Resolution
 
