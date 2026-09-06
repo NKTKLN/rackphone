@@ -5,16 +5,21 @@ HERE=$(cd "$(dirname "$0")" && pwd)
 . "$HERE/lib.sh"
 
 REPO=$(cd "$HERE/.." && pwd)
-REMOTE="$REPO/modules/rackphone-remote/rackphone"
+
+WORK=$(mktemp -d)
+# The plugin is exercised as a copy. `action.sh` derives its module directory
+# from its own path, so a test running the tracked one has to plant fixtures
+# beside it - and this suite used to delete the vendored jar on the way out,
+# taking a real artifact with it. A copy cannot reach the repository at all.
+cp -r "$REPO/modules/rackphone-remote" "$WORK/module"
+REMOTE="$WORK/module/rackphone"
 ACTION="$REMOTE/action.sh"
 STATUS="$REMOTE/status.sh"
 JAR="$REMOTE/scrcpy-server.jar"
 SUM="$REMOTE/scrcpy-server.sha256"
 
-WORK=$(mktemp -d)
 cleanup() {
   sh "$ACTION" stop >/dev/null 2>&1 || true
-  rm -f "$JAR" "$SUM"
   rm -rf "$WORK"
 }
 trap cleanup EXIT
