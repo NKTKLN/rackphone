@@ -40,11 +40,20 @@ sha256sum "$JAR" | sed 's|  .*|  scrcpy-server.jar|' > "$SUM"
 
 section "Stop insists when the server ignores TERM"
 mkdir -p "$RACKPHONE_CONF_DIR/run"
-sh -c 'trap "" TERM; sleep 30' &
-STUBBORN=$!
+# The stubborn process is started and reaped inside a subshell whose stderr is
+# discarded: the shell announces an abnormal exit when it collects the job, and
+# a bare "Killed" line reads as a broken suite rather than as this test proving
+# the escalation works.
+STUBBORN=$(
+  {
+    sh -c 'trap "" TERM; sleep 30' &
+    echo $!
+  } 2>/dev/null
+)
 echo "$STUBBORN" > "$RACKPHONE_CONF_DIR/run/remote.pid"
 date +%s > "$RACKPHONE_CONF_DIR/run/remote.started"
 sh "$ACTION" stop >/dev/null 2>&1 || true
+sleep 1
 if kill -0 "$STUBBORN" 2>/dev/null; then
   kill -9 "$STUBBORN" 2>/dev/null || true
   _bad "stop kills a server that ignores TERM" "process survived stop"
