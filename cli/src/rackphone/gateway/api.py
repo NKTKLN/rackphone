@@ -10,10 +10,13 @@ import asyncio
 import contextlib
 import hmac
 import json
+import os
+import tempfile
 import time
 from collections.abc import AsyncIterator, Callable, Iterable
 from dataclasses import asdict
 from http import HTTPStatus
+from pathlib import Path
 from typing import Annotated, Any
 
 from fastapi import (
@@ -26,8 +29,9 @@ from fastapi import (
     Response,
     WebSocket,
 )
-from fastapi.responses import StreamingResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel
+from starlette.background import BackgroundTask
 
 from rackphone import __version__, render, units
 from rackphone.gateway.auth import (
@@ -43,6 +47,18 @@ from rackphone.gateway.config import (
     is_loopback,
 )
 from rackphone.gateway.drain import MessageGateway
+from rackphone.gateway.failures import DeviceBoundaryError
+from rackphone.gateway.files import (
+    MAX_FILE_SIZE,
+    FilesError,
+    fetch,
+    list_files,
+    remove,
+    resolve,
+)
+from rackphone.gateway.files import (
+    store as store_file,
+)
 from rackphone.gateway.login import LoginService, RefusalReason, Tokens
 from rackphone.gateway.presence import ClientPresence
 from rackphone.gateway.relay import ScreenRelay
@@ -283,6 +299,29 @@ def create_app(  # noqa: C901, PLR0913, PLR0915, PLR0917
         if "screen" not in config.capabilities_for(unit):
             raise HTTPException(HTTPStatus.FORBIDDEN, "unit capability denied")
 
+    def files_unit(unit: str) -> None:
+        """Require a configured unit with the files capability."""
+        if not any(item.name == unit for item in units.load_all_units()):
+            raise HTTPException(HTTPStatus.NOT_FOUND, "unknown unit")
+        if "files" not in config.capabilities_for(unit):
+            raise HTTPException(HTTPStatus.FORBIDDEN, "unit capability denied")
+
+    def translate_device_error(error: DeviceBoundaryError) -> HTTPException:
+        """Turn a device-boundary refusal into the status the contract uses.
+
+        Args:
+            error: The refusal raised while sending or transferring.
+
+        Returns:
+            HTTPException: 502 when the phone failed, 400 when the request did.
+        """
+        # 502 rather than 500: the gateway is fine and the phone is not, and
+        # that difference is what tells an operator where to look.
+        status = (
+            HTTPStatus.BAD_GATEWAY if error.device_failure else HTTPStatus.BAD_REQUEST
+        )
+        return HTTPException(status, str(error))
+
     async def relay_heartbeat(unit: str, holder: str) -> None:
         """Keep a WebSocket-owned screen lease fresh while it remains open."""
         while True:
@@ -522,6 +561,106 @@ def create_app(  # noqa: C901, PLR0913, PLR0915, PLR0917
             "samples": parse_samples(exposition) if is_up else {},
         }
 
+    @app.get("/api/units/{unit}/files", dependencies=control_auth)
+    def read_unit_files(unit: str) -> list[dict[str, Any]]:
+        """List files in one unit's confined transfer directory."""
+        files_unit(unit)
+        try:
+            return list_files(unit)
+        except FilesError as exc:
+            raise translate_device_error(exc) from exc
+
+    @app.post("/api/units/{unit}/files", dependencies=control_auth)
+    async def upload_unit_file(
+        unit: str, name: str, request: Request
+    ) -> dict[str, Any]:
+        """Stream one request body to disk, then transfer it to a unit."""
+        files_unit(unit)
+        try:
+            resolve(name)
+        except FilesError as exc:
+            raise translate_device_error(exc) from exc
+
+        size = 0
+        with tempfile.NamedTemporaryFile(
+            prefix="rackphone-upload-", delete=False
+        ) as temporary:
+            temporary_path = temporary.name
+            try:
+                async for chunk in request.stream():
+                    size += len(chunk)
+                    if size > MAX_FILE_SIZE:
+                        raise HTTPException(
+                            HTTPStatus.BAD_REQUEST,
+                            f"file exceeds the {MAX_FILE_SIZE}-byte size limit",
+                        )
+                    temporary.write(chunk)
+                temporary.flush()
+                try:
+                    store_file(unit, name, temporary_path)
+                except FilesError as exc:
+                    raise translate_device_error(exc) from exc
+            finally:
+                Path(temporary_path).unlink(missing_ok=True)
+
+        # File bytes are deliberately absent from the permanent action log.
+        login.store.record_audit(
+            int(time.time()),
+            "file_write",
+            subject=unit,
+            detail=f"name={name} direction=upload",
+        )
+        return {"name": name, "size": size}
+
+    @app.get("/api/units/{unit}/files/{name}", dependencies=control_auth)
+    def download_unit_file(unit: str, name: str) -> FileResponse:
+        """Download one checksummed file and remove its host temporary copy."""
+        files_unit(unit)
+        try:
+            resolve(name)
+        except FilesError as exc:
+            raise translate_device_error(exc) from exc
+        descriptor, temporary_path = tempfile.mkstemp(prefix="rackphone-download-")
+        os.close(descriptor)
+        try:
+            fetch(unit, name, temporary_path)
+        except FileNotFoundError as exc:
+            Path(temporary_path).unlink(missing_ok=True)
+            raise HTTPException(HTTPStatus.NOT_FOUND, "file not found") from exc
+        except FilesError as exc:
+            Path(temporary_path).unlink(missing_ok=True)
+            raise translate_device_error(exc) from exc
+        except BaseException:
+            Path(temporary_path).unlink(missing_ok=True)
+            raise
+        return FileResponse(
+            temporary_path,
+            filename=name,
+            media_type="application/octet-stream",
+            background=BackgroundTask(Path(temporary_path).unlink, missing_ok=True),
+        )
+
+    @app.delete(
+        "/api/units/{unit}/files/{name}",
+        dependencies=control_auth,
+        status_code=HTTPStatus.NO_CONTENT,
+    )
+    def delete_unit_file(unit: str, name: str) -> None:
+        """Remove one confined file and audit its name, never its contents."""
+        files_unit(unit)
+        try:
+            remove(unit, name)
+        except FileNotFoundError as exc:
+            raise HTTPException(HTTPStatus.NOT_FOUND, "file not found") from exc
+        except FilesError as exc:
+            raise translate_device_error(exc) from exc
+        login.store.record_audit(
+            int(time.time()),
+            "file_write",
+            subject=unit,
+            detail=f"name={name} direction=remove",
+        )
+
     @app.post("/api/login")
     def log_in(body: LoginBody, request: Request) -> dict[str, str | int]:
         """Authenticate credentials and return a token pair."""
@@ -679,10 +818,7 @@ def create_app(  # noqa: C901, PLR0913, PLR0915, PLR0917
         try:
             answer = send_sms(body.unit, body.to, body.body)
         except SendError as exc:
-            status = (
-                HTTPStatus.BAD_GATEWAY if exc.device_failure else HTTPStatus.BAD_REQUEST
-            )
-            raise HTTPException(status, str(exc)) from exc
+            raise translate_device_error(exc) from exc
         # An outbound message is billable and externally visible. Audit the
         # target, but never its content: the action log must not copy outbox data.
         login.store.record_audit(

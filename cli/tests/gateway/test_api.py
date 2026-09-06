@@ -878,6 +878,212 @@ def test_screen_session_routes_enforce_ownership_and_capability(
     auth_store.close()
 
 
+class TestFiles:
+    @staticmethod
+    def _unit(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+        found = [api.units.Unit("lisa01", tmp_path / "unit")]
+        monkeypatch.setattr(api.units, "load_all_units", lambda: found)
+
+    def test_each_route_succeeds_and_writes_are_audited(
+        self,
+        populated_store: EventStore,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        config = GatewayConfig(api_token="legacy")
+        auth_store = AuthStore(tmp_path / "auth.db")
+        self._unit(monkeypatch, tmp_path)
+        monkeypatch.setattr(
+            api,
+            "list_files",
+            lambda _unit: [{"name": "note", "size": 4, "modified_at": 10}],
+        )
+        monkeypatch.setattr(api, "store_file", lambda *_args: None)
+
+        def fetched(_unit: str, _name: str, destination: str) -> None:
+            Path(destination).write_bytes(b"note")
+
+        monkeypatch.setattr(api, "fetch", fetched)
+        monkeypatch.setattr(api, "remove", lambda *_args: None)
+        with TestClient(
+            create_app(config, populated_store, LoginService(config, auth_store))
+        ) as client:
+            client.headers["Authorization"] = "Bearer legacy"
+            assert client.get("/api/units/lisa01/files").status_code == HTTP_OK
+            upload = client.post(
+                "/api/units/lisa01/files", params={"name": "note"}, content=b"note"
+            )
+            download = client.get("/api/units/lisa01/files/note")
+            deleted = client.delete("/api/units/lisa01/files/note")
+        assert upload.status_code == HTTP_OK
+        assert download.status_code == HTTP_OK
+        assert download.content == b"note"
+        assert deleted.status_code == HTTP_NO_CONTENT
+        audit = auth_store.query_audit()
+        assert {row["detail"] for row in audit} == {
+            "name=note direction=upload",
+            "name=note direction=remove",
+        }
+        auth_store.close()
+
+    @pytest.mark.parametrize("fails", [False, True])
+    def test_upload_temporary_file_is_removed(
+        self,
+        fails: bool,
+        populated_store: EventStore,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        config = GatewayConfig(api_token="legacy")
+        auth_store = AuthStore(tmp_path / "auth.db")
+        self._unit(monkeypatch, tmp_path)
+        seen: list[Path] = []
+
+        def transfer(_unit: str, _name: str, source: str) -> None:
+            path = Path(source)
+            assert path.read_bytes() == b"secret"
+            seen.append(path)
+            if fails:
+                error = api.FilesError("offline")
+                error.device_failure = True
+                raise error
+
+        monkeypatch.setattr(api, "store_file", transfer)
+        with TestClient(
+            create_app(config, populated_store, LoginService(config, auth_store))
+        ) as client:
+            response = client.post(
+                "/api/units/lisa01/files",
+                params={"name": "note"},
+                content=b"secret",
+                headers={"Authorization": "Bearer legacy"},
+            )
+        assert response.status_code == (HTTP_BAD_GATEWAY if fails else HTTP_OK)
+        assert seen and not seen[0].exists()
+        auth_store.close()
+
+    def test_oversized_upload_is_bad_request(
+        self,
+        populated_store: EventStore,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        config = GatewayConfig(api_token="legacy")
+        auth_store = AuthStore(tmp_path / "auth.db")
+        self._unit(monkeypatch, tmp_path)
+        monkeypatch.setattr(api, "MAX_FILE_SIZE", 3)
+        monkeypatch.setattr(api, "store_file", lambda *_args: pytest.fail("stored"))
+        with TestClient(
+            create_app(config, populated_store, LoginService(config, auth_store))
+        ) as client:
+            response = client.post(
+                "/api/units/lisa01/files",
+                params={"name": "note"},
+                content=b"four",
+                headers={"Authorization": "Bearer legacy"},
+            )
+        assert response.status_code == HTTP_BAD_REQUEST
+        auth_store.close()
+
+    @pytest.mark.parametrize(
+        ("error", "expected"),
+        [
+            (FileNotFoundError("note"), HTTP_NOT_FOUND),
+            (api.FilesError("offline"), HTTP_BAD_GATEWAY),
+        ],
+    )
+    def test_download_translates_missing_and_device_failures(
+        self,
+        error: BaseException,
+        expected: int,
+        populated_store: EventStore,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        config = GatewayConfig(api_token="legacy")
+        auth_store = AuthStore(tmp_path / "auth.db")
+        self._unit(monkeypatch, tmp_path)
+        if isinstance(error, api.FilesError):
+            error.device_failure = True
+
+        def fail(*_args: object) -> None:
+            raise error
+
+        monkeypatch.setattr(api, "fetch", fail)
+        with TestClient(
+            create_app(config, populated_store, LoginService(config, auth_store))
+        ) as client:
+            response = client.get(
+                "/api/units/lisa01/files/note",
+                headers={"Authorization": "Bearer legacy"},
+            )
+        assert response.status_code == expected
+        auth_store.close()
+
+    @pytest.mark.parametrize(
+        ("method", "path"),
+        [
+            ("get", "/api/units/lisa01/files"),
+            ("post", "/api/units/lisa01/files?name=note"),
+            ("get", "/api/units/lisa01/files/note"),
+            ("delete", "/api/units/lisa01/files/note"),
+        ],
+    )
+    def test_read_token_is_refused_by_every_route(
+        self,
+        method: str,
+        path: str,
+        populated_store: EventStore,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        config = GatewayConfig(admin=AdminConfig("admin", hash_password("right")))
+        auth_store = AuthStore(tmp_path / "auth.db")
+        login = LoginService(config, auth_store)
+        outcome = login.log_in(
+            "admin", "right", "peer", "reader", 1000, scope=SCOPE_READ
+        )
+        assert outcome.tokens is not None
+        monkeypatch.setattr(api.time, "time", lambda: 1001)
+        with TestClient(create_app(config, populated_store, login)) as client:
+            response = client.request(
+                method,
+                path,
+                headers={"Authorization": f"Bearer {outcome.tokens.access}"},
+            )
+        assert response.status_code == HTTP_UNAUTHORIZED
+        auth_store.close()
+
+    @pytest.mark.parametrize(
+        ("capabilities", "path", "expected"),
+        [
+            (frozenset(), "/api/units/lisa01/files", HTTP_FORBIDDEN),
+            (frozenset({"files"}), "/api/units/missing/files", HTTP_NOT_FOUND),
+            (frozenset({"files"}), "/api/units/lisa01/files/.hidden", HTTP_BAD_REQUEST),
+        ],
+    )
+    def test_route_refusals_have_the_documented_status(  # noqa: PLR0913, PLR0917
+        self,
+        capabilities: frozenset[str],
+        path: str,
+        expected: int,
+        populated_store: EventStore,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        config = GatewayConfig(
+            api_token="legacy", unit_capabilities={"lisa01": capabilities}
+        )
+        auth_store = AuthStore(tmp_path / "auth.db")
+        self._unit(monkeypatch, tmp_path)
+        with TestClient(
+            create_app(config, populated_store, LoginService(config, auth_store))
+        ) as client:
+            response = client.get(path, headers={"Authorization": "Bearer legacy"})
+        assert response.status_code == expected
+        auth_store.close()
+
+
 class TestStream:
     def test_new_events_are_yielded_in_order(
         self, populated_store: EventStore, make_event: EventFactory

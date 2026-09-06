@@ -379,11 +379,27 @@ device. Within `/sdcard` the transfer needs no root at all: `adb push` runs as
 
 | Rule | Value |
 | --- | --- |
-| Root allowed to the API | `/sdcard/rackphone/` only, paths normalised, `..` refused |
+| Root allowed to the API | `/sdcard/rackphone/` only; clients supply a single name, never a path |
 | Privileges required | None; `su` is never invoked on this path |
 | Size ceiling | 512 MB |
 | Buffering | Streamed to disk, and the temporary file is removed on every exit |
-| Verification | `sha256sum` on the device compared after the push |
+| Verification | Local SHA-256 compared with device `sha256sum` after every push or pull |
+
+Names containing a separator, `..`, a leading dot, NUL, or any control
+character are rejected rather than normalised. The routes require a `control`
+token and the unit's `files` capability:
+
+| Method | Route | Operation |
+| --- | --- | --- |
+| `GET` | `/api/units/{unit}/files` | List names, sizes, and Unix modification times |
+| `POST` | `/api/units/{unit}/files?name={name}` | Stream an upload to the unit |
+| `GET` | `/api/units/{unit}/files/{name}` | Download and verify a file |
+| `DELETE` | `/api/units/{unit}/files/{name}` | Remove a file |
+
+Uploads and removals record the unit, name, and direction in the audit log;
+file contents are never audited. Rejected names and bodies above the ceiling
+return 400, denied capabilities return 403, unknown units and missing files
+return 404, and unreachable devices return 502.
 
 Anything outside that directory is a host operation — `rackphone install`,
 `deploy`, or `adb push` from a shell on the machine that owns the cable.

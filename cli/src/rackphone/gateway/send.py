@@ -9,6 +9,7 @@ from typing import Any
 
 from rackphone import units
 from rackphone.device import adb
+from rackphone.gateway.failures import DeviceBoundaryError
 
 DEFAULT_SEND_TIMEOUT_SECONDS = 60
 DESTINATION_PATTERN = re.compile(r"\+?[0-9]+\Z")
@@ -16,10 +17,8 @@ COMPANION_PLUGIN = "companion"
 SEND_ACTION = "send"
 
 
-class SendError(RuntimeError):
+class SendError(DeviceBoundaryError):
     """A refusal suitable for display to an operator."""
-
-    device_failure = False
 
 
 class _DeviceSendError(SendError):

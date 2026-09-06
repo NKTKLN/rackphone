@@ -255,6 +255,26 @@ class TestPush:
             adb.push_file("AAA", LOCAL_ZIP, REMOTE_ZIP)
 
 
+class TestPull:
+    def test_a_successful_pull_is_silent(
+        self, fake_subprocess: list[list[str]]
+    ) -> None:
+        adb.pull_file("AAA", REMOTE_ZIP, LOCAL_ZIP)
+        assert fake_subprocess[0][-3:] == ["pull", REMOTE_ZIP, LOCAL_ZIP]
+
+    def test_a_failed_pull_raises(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(adb, "find_adb_binary", lambda: "/usr/bin/adb")
+        monkeypatch.setattr(
+            adb.subprocess,
+            "run",
+            lambda *_args, **_kwargs: FakeCompletedProcess(
+                stderr="device offline", returncode=1
+            ),
+        )
+        with pytest.raises(adb.AdbError, match="device offline"):
+            adb.pull_file("AAA", REMOTE_ZIP, LOCAL_ZIP)
+
+
 class TestForward:
     """Host ports delegated to adb rather than hard-coded by the gateway."""
 

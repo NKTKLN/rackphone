@@ -291,3 +291,25 @@ def push_file(serial: str, local_path: str, remote_path: str) -> None:
     )
     if completed.returncode != 0:
         raise AdbError(completed.stderr.strip())
+
+
+def pull_file(serial: str, remote_path: str, local_path: str) -> None:
+    """Copy a device file onto this host.
+
+    Args:
+        serial: Serial of the target device.
+        remote_path: Source path on the device.
+        local_path: Destination path on this host.
+
+    Raises:
+        AdbError: If the transfer fails.
+    """
+    completed = subprocess.run(  # noqa: S603 - fixed argv, no shell involved
+        [*build_adb_command(), "-s", serial, "pull", remote_path, local_path],
+        capture_output=True,
+        text=True,
+        timeout=PUSH_TIMEOUT_SECONDS,
+        check=False,
+    )
+    if completed.returncode != 0:
+        raise AdbError(completed.stderr.strip())
