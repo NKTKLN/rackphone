@@ -1,0 +1,27 @@
+{
+  "_comment": [
+    "Names the gateway must refuse for a unit's transfer directory.",
+    "Read by cli/tests/gateway/test_files.py and by",
+    "client/test/data/files_controller_test.dart, so the Python rule and the",
+    "Dart mirror of it cannot drift apart quietly: a shape added here has to be",
+    "refused by both, and neither suite passes until it is.",
+    "Regenerate with tests/fixtures/build_refused_names.py; do not hand-edit."
+  ],
+  "refused": [
+    "",
+    ".hidden",
+    "..",
+    "a..b",
+    "a/b",
+    "a\\b",
+    "nul\u0000byte",
+    "line\nbreak",
+    "tab\tname",
+    "delete\u007f"
+  ],
+  "accepted": [
+    "plain file.zip",
+    "capture-2026-09-06.mp4",
+    "notes.txt"
+  ]
+}

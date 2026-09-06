@@ -1,6 +1,9 @@
 import 'dart:async';
 import 'dart:typed_data';
 
+import 'dart:convert';
+import 'dart:io';
+
 import 'package:flutter_test/flutter_test.dart';
 import 'package:rackphone_client/src/api/gateway_client.dart';
 import 'package:rackphone_client/src/api/models.dart';
@@ -37,21 +40,22 @@ void main() {
       unit: 'lisa01',
     );
     const verdict = 'file name must be one plain, visible name';
-    final refused = <String>[
-      '',
-      '.hidden',
-      'two..dots',
-      'dir/file',
-      r'dir\file',
-      'null\u0000byte',
-      'line\nbreak',
-      'delete\u007fbyte',
-    ];
+    // The shapes come from the fixture the gateway's own suite reads, so this
+    // mirror cannot fall behind the rule it mirrors without a test noticing.
+    final cases =
+        jsonDecode(
+              File(
+                '../tests/fixtures/refused_file_names.json',
+              ).readAsStringSync(),
+            )
+            as Map<String, dynamic>;
 
-    for (final name in refused) {
+    for (final name in (cases['refused'] as List).cast<String>()) {
       expect(controller.nameRefusal(name), verdict, reason: name);
     }
-    expect(controller.nameRefusal('plain file.zip'), isNull);
+    for (final name in (cases['accepted'] as List).cast<String>()) {
+      expect(controller.nameRefusal(name), isNull, reason: name);
+    }
   });
 
   test('an oversized upload is refused before the gateway call', () async {

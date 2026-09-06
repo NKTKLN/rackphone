@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 from pathlib import Path
 
 import pytest
@@ -10,29 +11,24 @@ import pytest
 from rackphone.device import adb
 from rackphone.gateway import files
 
-
-@pytest.mark.parametrize(
-    "name",
-    [
-        "",
-        ".hidden",
-        "..",
-        "a..b",
-        "a/b",
-        "a\\b",
-        "nul\0byte",
-        "line\nbreak",
-        "tab\tname",
-        "delete\x7f",
-    ],
+# The shapes live in a fixture the client's suite reads too, so this rule and
+# the mirror of it in Dart cannot quietly disagree about what a name may be.
+NAME_CASES = json.loads(
+    (
+        Path(__file__).resolve().parents[3] / "tests/fixtures/refused_file_names.json"
+    ).read_text()
 )
+
+
+@pytest.mark.parametrize("name", NAME_CASES["refused"])
 def test_resolve_rejects_every_location_bearing_name(name: str) -> None:
     with pytest.raises(files.FilesError):
         files.resolve(name)
 
 
-def test_resolve_confines_a_plain_name() -> None:
-    assert files.resolve("backup.zip") == "/sdcard/rackphone/backup.zip"
+@pytest.mark.parametrize("name", NAME_CASES["accepted"])
+def test_resolve_confines_a_plain_name(name: str) -> None:
+    assert files.resolve(name) == f"/sdcard/rackphone/{name}"
 
 
 def test_store_refuses_a_file_above_the_cap(
