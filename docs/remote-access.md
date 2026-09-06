@@ -510,6 +510,16 @@ Each step is useful on its own, and each is safe to stop after.
    last, when authentication, transport and the client around it are proven.
 6. **Files.** Independent of everything above; fits wherever it is convenient.
 
+All six are built. Two things about the client turned out differently from the
+sketch above, and are worth naming rather than leaving to be discovered:
+
+- **Files are not a fifth destination.** The bottom bar holds the four places an
+  operator lives; a transfer is an errand, so it is an action in the app bar,
+  and it is absent for a unit without the `files` capability.
+- **Choosing a file is a method channel, not a package.** The obvious dependency
+  does not build against the current Android Gradle plugin, and picking a
+  document is two intents on the one platform this app targets.
+
 ## Where this is written in the code
 
 | Claim | Where to look |
