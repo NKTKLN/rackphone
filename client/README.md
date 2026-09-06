@@ -6,7 +6,7 @@
 [![Android](https://img.shields.io/badge/Android-min%2026%20·%20target%2036-3DDC84?logo=android&logoColor=white)](https://developer.android.com/)
 [![Material](https://img.shields.io/badge/Material-3-757575?logo=materialdesign&logoColor=white)](https://m3.material.io/)
 [![scrcpy](https://img.shields.io/badge/scrcpy-3.3.1-1E8CBE)](https://github.com/Genymobile/scrcpy)
-[![Tests](https://img.shields.io/badge/tests-82%20Dart%20·%202%20Kotlin-0A9EDC?logo=flutter&logoColor=white)](#-tests)
+[![Tests](https://img.shields.io/badge/tests-83%20Dart%20·%202%20Kotlin-0A9EDC?logo=flutter&logoColor=white)](#-tests)
 [![Conventional Commits](https://img.shields.io/badge/Conventional%20Commits-1.0.0-FE5196?logo=conventionalcommits&logoColor=white)](https://www.conventionalcommits.org/)
 [![License](https://img.shields.io/badge/License-MIT-blue)](../LICENSE.md)
 
@@ -125,7 +125,7 @@ cd client && flutter build apk --config-only
 JAVA_HOME=/usr/lib/jvm/jdk-21 client/android/gradlew -p client/android :app:testDebugUnitTest
 ```
 
-82 Dart tests and 2 Kotlin tests. Nothing in them needs a phone, a gateway or an
+83 Dart tests and 2 Kotlin tests. Nothing in them needs a phone, a gateway or an
 Android engine: every boundary that would require one — the decoder, the socket,
 the token store — sits behind an interface with an in-memory implementation
 beside it. What that buys is a suite which fails for one reason only, which is

@@ -165,7 +165,7 @@ cli/               host-side CLI, src layout, one package per concern
   src/rackphone/gateway/   authentication: scrypt, TOTP, lockouts, scoped tokens
   src/rackphone/metrics/   Prometheus bridge
   src/rackphone/cli/       the command tree, one module per command group
-  tests/                   409 checks, no device required
+  tests/                   411 checks, no device required
 modules/           Magisk modules, one directory per plugin
   rackphone-core/       config store, plugin discovery, on-device `rackphone`
   rackphone-telemetry/  Prometheus collector
@@ -190,8 +190,8 @@ docs/              install walkthrough, plugin contract, metric reference, adb s
 ./tests/run.sh
 ```
 
-**758 checks**: 409 pytest, 168 shell, 71 in the companion app (39 Dart,
-32 Kotlin), 84 in the client (82 Dart, 2 Kotlin), 27 live-device. The device
+**761 checks**: 411 pytest, 168 shell, 71 in the companion app (39 Dart,
+32 Kotlin), 85 in the client (83 Dart, 2 Kotlin), 27 live-device. The device
 tests skip themselves when nothing is attached, so the suite runs on a machine
 with no phone.
 
