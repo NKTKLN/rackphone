@@ -10,3 +10,9 @@ cfg() {
   [ -n "$_v" ] && { echo "$_v"; return; }
   sed -n "s/^[[:space:]]*$1=//p" "$MODDIR/rackphone/defaults.env" 2>/dev/null | tail -1
 }
+
+# The vendored server's version. Declared once: action.sh launches this version,
+# status.sh reports it, and the client parses this version's framing - three
+# copies could disagree, and the disagreement would show up as a screen that
+# never decodes while status insists all is well.
+SCRCPY_VERSION=3.3.1

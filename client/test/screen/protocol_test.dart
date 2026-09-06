@@ -1,3 +1,4 @@
+import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
@@ -107,6 +108,17 @@ void main() {
       ),
       <int>[0, 1, 1, 2, 3, 4, 0x11, 0x12, 0x13, 0x14, 0x21, 0x22, 0x23, 0x24],
     );
+  });
+
+  test('the pinned version matches the module that ships the server', () {
+    // Three places name this version: the launcher, the status line and this
+    // parser. The first two are shell and now share one constant; this one
+    // cannot import it, so it is bound here - a partial upgrade would otherwise
+    // arrive as a screen that never decodes while status reports all is well.
+    final declared = File('../modules/rackphone-remote/rackphone/cfg.sh')
+        .readAsLinesSync()
+        .firstWhere((line) => line.startsWith('SCRCPY_VERSION='));
+    expect(declared, 'SCRCPY_VERSION=$scrcpyProtocolVersion');
   });
 }
 

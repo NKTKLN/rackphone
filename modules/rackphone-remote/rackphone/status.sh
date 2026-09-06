@@ -7,7 +7,6 @@ RUN="$RP_CONF/run"
 PIDFILE="$RUN/remote.pid"
 JAR="$MODDIR/rackphone/scrcpy-server.jar"
 SUM="$MODDIR/rackphone/scrcpy-server.sha256"
-SCRCPY_VERSION=3.3.1
 
 pid=$(cat "$PIDFILE" 2>/dev/null || true)
 case "$pid" in
@@ -22,10 +21,11 @@ else
 fi
 echo "jar_version=$SCRCPY_VERSION"
 
-verified=no
-if [ -f "$JAR" ] && [ -f "$SUM" ]; then
-  want=$(sed -n '1{s/[[:space:]].*//;p;}' "$SUM" | tr 'A-F' 'a-f')
-  have=$(sha256sum "$JAR" 2>/dev/null | sed 's/[[:space:]].*//' | tr 'A-F' 'a-f')
-  case "$want" in *[!0-9a-f]*|'') : ;; *) [ "${#want}" -eq 64 ] && [ "$have" = "$want" ] && verified=yes ;; esac
+# Asking action.sh rather than checking again: two implementations of "is this
+# jar trustworthy" can disagree, and the one that reports would then be able to
+# say yes about a jar the one that launches refuses.
+if sh "$MODDIR/rackphone/action.sh" version >/dev/null 2>&1; then
+  echo "jar_verified=yes"
+else
+  echo "jar_verified=no"
 fi
-echo "jar_verified=$verified"

@@ -10,9 +10,6 @@ STARTFILE="$RUN/remote.started"
 LOCK="$RUN/remote.starting"
 JAR="$MODDIR/rackphone/scrcpy-server.jar"
 SUM="$MODDIR/rackphone/scrcpy-server.sha256"
-# This must match the vendored server because scrcpy rejects a mismatched
-# client/server protocol before opening its sockets.
-SCRCPY_VERSION=3.3.1
 
 running() {
   [ -f "$PIDFILE" ] || return 1
@@ -96,6 +93,12 @@ stop() {
 case "${1:-}" in
   start) start ;;
   stop) stop ;;
-  version) printf 'version=%s\nsha256=%s\n' "$SCRCPY_VERSION" "$(verified_hash)" ;;
+  version)
+    # The digest is taken first and the exit status checked: inside a command
+    # substitution a failed verification is swallowed, and this action would
+    # then report success for a jar that start refuses to run.
+    hash=$(verified_hash) || exit 1
+    printf 'version=%s\nsha256=%s\n' "$SCRCPY_VERSION" "$hash"
+    ;;
   *) echo "unknown action: ${1:-}" >&2; exit 2 ;;
 esac
