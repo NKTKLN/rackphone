@@ -29,6 +29,12 @@ final class FilesController extends ChangeNotifier {
 
   /// Mirrors the gateway's rules only to answer sooner; the gateway remains
   /// the authority for every name it receives.
+  ///
+  /// The rules themselves live in `resolve` in `cli/.../gateway/files.py`, and
+  /// a copy in another language cannot be imported. What keeps the two honest
+  /// is that both sides list the refused shapes in their own tests: a rule
+  /// added there without one added here shows up as a round trip and a banner,
+  /// never as a file that lands somewhere it should not.
   String? nameRefusal(String name) {
     final refused =
         name.isEmpty ||

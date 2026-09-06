@@ -48,6 +48,11 @@ def resolve(name: str) -> str:
     # This deliberately validates a name instead of normalising a path: no
     # client input is allowed to name a location, even if normalisation would
     # happen to leave that location beneath the confinement root.
+    #
+    # The client mirrors these shapes in `nameRefusal` so a doomed upload costs
+    # no round trip. That copy is a convenience and this is the authority: a
+    # rule added here and not there is a worse error message, while a rule
+    # added there and not here would be a hole.
     if (
         not name
         or name.startswith(".")
