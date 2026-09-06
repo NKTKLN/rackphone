@@ -1,6 +1,40 @@
 /// Tolerant, immutable representations of the gateway's public JSON.
 library;
 
+/// Metadata for one regular file in a unit's confined transfer directory.
+class UnitFile {
+  const UnitFile({
+    required this.name,
+    required this.size,
+    required this.modifiedAt,
+  });
+
+  factory UnitFile.fromJson(Map<String, dynamic> json) => UnitFile(
+    name: _string(json['name']),
+    size: _int(json['size']) ?? 0,
+    modifiedAt: _int(json['modified_at']) ?? 0,
+  );
+
+  final String name;
+  final int size;
+  final int modifiedAt;
+
+  DateTime get modified => DateTime.fromMillisecondsSinceEpoch(
+    modifiedAt * Duration.millisecondsPerSecond,
+    isUtc: true,
+  );
+
+  @override
+  bool operator ==(Object other) =>
+      other is UnitFile &&
+      name == other.name &&
+      size == other.size &&
+      modifiedAt == other.modifiedAt;
+
+  @override
+  int get hashCode => Object.hash(name, size, modifiedAt);
+}
+
 /// A short-lived access token paired with the refresh token that rotates it.
 ///
 /// Expiry values stay as Unix seconds because that is the signed server

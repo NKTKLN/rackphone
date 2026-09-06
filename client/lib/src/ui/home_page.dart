@@ -2,10 +2,12 @@ import 'package:flutter/material.dart';
 
 import '../api/gateway_client.dart';
 import '../data/feed_controller.dart';
+import '../data/files_controller.dart';
 import '../screen/decoder.dart';
 import '../screen/screen_controller.dart';
 import '../session/session_controller.dart';
 import 'pages/feed_page.dart';
+import 'pages/files_page.dart';
 import 'pages/messages_page.dart';
 import 'pages/overview_page.dart';
 import 'pages/screen_page.dart';
@@ -97,6 +99,14 @@ class _HomePageState extends State<HomePage> {
         selectedName: widget.controller.selectedUnit?.name,
         onSelect: widget.controller.select,
       ),
+      actions: [
+        if (widget.controller.selectedUnit?.can('files') == true)
+          IconButton(
+            tooltip: 'Files',
+            onPressed: _openFiles,
+            icon: const Icon(Icons.folder_outlined),
+          ),
+      ],
     ),
     body: _body(),
     bottomNavigationBar: NavigationBar(
@@ -105,6 +115,19 @@ class _HomePageState extends State<HomePage> {
       destinations: _destinations,
     ),
   );
+
+  Future<void> _openFiles() async {
+    final unit = widget.controller.selectedUnit;
+    final gateway = widget.controller.gateway;
+    if (unit == null || gateway == null || !unit.can('files')) return;
+    final controller = FilesController(gateway: gateway, unit: unit.name);
+    await Navigator.of(context).push<void>(
+      MaterialPageRoute<void>(
+        builder: (_) => FilesPage(controller: controller),
+      ),
+    );
+    controller.dispose();
+  }
 
   Widget _body() {
     final unit = widget.controller.selectedUnit;

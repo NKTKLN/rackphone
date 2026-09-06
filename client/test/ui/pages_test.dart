@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -6,11 +7,16 @@ import 'package:rackphone_client/src/api/gateway_client.dart';
 import 'package:rackphone_client/src/api/errors.dart';
 import 'package:rackphone_client/src/api/models.dart';
 import 'package:rackphone_client/src/data/feed_controller.dart';
+import 'package:rackphone_client/src/data/files_controller.dart';
 import 'package:rackphone_client/src/screen/decoder.dart';
 import 'package:rackphone_client/src/screen/protocol.dart';
 import 'package:rackphone_client/src/screen/screen_controller.dart';
 import 'package:rackphone_client/src/screen/screen_socket.dart';
+import 'package:rackphone_client/src/session/session_controller.dart';
+import 'package:rackphone_client/src/session/token_store.dart';
+import 'package:rackphone_client/src/ui/home_page.dart';
 import 'package:rackphone_client/src/ui/pages/feed_page.dart';
+import 'package:rackphone_client/src/ui/pages/files_page.dart';
 import 'package:rackphone_client/src/ui/pages/messages_page.dart';
 import 'package:rackphone_client/src/ui/pages/overview_page.dart';
 import 'package:rackphone_client/src/ui/pages/screen_page.dart';
@@ -197,6 +203,108 @@ void main() {
     );
     expect(find.textContaining('held by'), findsNothing);
   });
+
+  testWidgets('file deletion asks before removing the only copy', (
+    tester,
+  ) async {
+    final gateway = _FilesPagesGateway();
+    final controller = FilesController(gateway: gateway, unit: 'lisa01');
+    await tester.pumpWidget(_app(FilesPage(controller: controller)));
+    await tester.pump();
+
+    await tester.tap(find.byTooltip('Delete payload.bin'));
+    await tester.pump();
+    expect(find.text('Delete payload.bin?'), findsOneWidget);
+    expect(gateway.removed, isEmpty);
+
+    await tester.tap(find.text('Delete'));
+    await tester.pump();
+    expect(gateway.removed, ['payload.bin']);
+  });
+
+  testWidgets('files action is absent without the unit capability', (
+    tester,
+  ) async {
+    final gateway = _PagesGateway(
+      telemetryValue: _telemetry(up: true),
+      statsValue: _stats(totp: true),
+    );
+    final session = SessionController(
+      tokenStore: InMemoryTokenStore(),
+      gatewayFactory: (_) => gateway,
+    );
+    await session.signIn(
+      baseUrl: Uri.parse('https://rack.example/'),
+      username: 'admin',
+      password: 'secret',
+      deviceLabel: 'test',
+    );
+
+    await tester.pumpWidget(MaterialApp(home: HomePage(controller: session)));
+
+    expect(find.byTooltip('Files'), findsNothing);
+  });
+}
+
+final class _FilesPagesGateway implements GatewayApi, GatewayFilesApi {
+  final List<String> removed = [];
+
+  @override
+  Future<List<UnitFile>> files(String unit) async => const [
+    UnitFile(name: 'payload.bin', size: 4, modifiedAt: 1700000000),
+  ];
+  @override
+  Future<void> removeFile(String unit, String name) async => removed.add(name);
+  @override
+  Future<Uint8List> downloadFile(String unit, String name) =>
+      throw UnimplementedError();
+  @override
+  Future<void> uploadFile(String unit, String name, Uint8List bytes) =>
+      throw UnimplementedError();
+  @override
+  Future<List<GatewayEvent>> calls({String? unit, int? since, int? limit}) =>
+      throw UnimplementedError();
+  @override
+  void close() {}
+  @override
+  Future<List<GatewayEvent>> events({
+    String? kind,
+    String? unit,
+    int? since,
+    int? limit,
+  }) => throw UnimplementedError();
+  @override
+  Future<GatewayHealth> health() => throw UnimplementedError();
+  @override
+  Future<Tokens> logIn({
+    required String username,
+    required String password,
+    required String deviceLabel,
+    String? totpCode,
+    String? recoveryCode,
+    String scope = 'control',
+  }) async => const Tokens(
+    refreshToken: 'refresh',
+    accessToken: 'access',
+    scope: 'control',
+    refreshExpiresAt: 1,
+    accessExpiresAt: 1,
+  );
+  @override
+  Future<void> logOut(String refreshToken) => throw UnimplementedError();
+  @override
+  Future<List<GatewayEvent>> messages({String? unit, int? since, int? limit}) =>
+      throw UnimplementedError();
+  @override
+  Future<Tokens> refresh(String refreshToken) => throw UnimplementedError();
+  @override
+  Future<GatewayStats> stats() => throw UnimplementedError();
+  @override
+  Stream<GatewayEvent> stream() => const Stream.empty();
+  @override
+  Future<UnitTelemetry> telemetry(String unit) => throw UnimplementedError();
+  @override
+  Future<List<RackUnit>> units() async => [_unit()];
 }
 
 final class _PageScreenConnection implements ScreenConnection {
@@ -321,7 +429,13 @@ final class _PagesGateway implements GatewayApi {
     String? totpCode,
     String? recoveryCode,
     String scope = 'control',
-  }) => throw UnimplementedError();
+  }) async => const Tokens(
+    refreshToken: 'refresh',
+    accessToken: 'access',
+    scope: 'control',
+    refreshExpiresAt: 1,
+    accessExpiresAt: 1,
+  );
   @override
   Future<void> logOut(String refreshToken) => throw UnimplementedError();
   @override
@@ -330,5 +444,5 @@ final class _PagesGateway implements GatewayApi {
   @override
   Future<Tokens> refresh(String refreshToken) => throw UnimplementedError();
   @override
-  Future<List<RackUnit>> units() => throw UnimplementedError();
+  Future<List<RackUnit>> units() async => [_unit()];
 }

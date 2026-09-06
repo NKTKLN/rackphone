@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:typed_data';
 
 import 'package:http/http.dart' as http;
 
@@ -44,6 +45,23 @@ abstract class GatewayApi {
   void close();
 }
 
+/// File operations are separate so existing lightweight gateway fakes do not
+/// have to pretend to provide a byte-transfer boundary they never exercise.
+abstract interface class GatewayFilesApi {
+  Future<List<UnitFile>> files(String unit);
+  Future<void> uploadFile(String unit, String name, Uint8List bytes);
+  Future<Uint8List> downloadFile(String unit, String name);
+  Future<void> removeFile(String unit, String name);
+}
+
+extension GatewayFileAccess on GatewayApi {
+  GatewayFilesApi get fileTransfer {
+    final gateway = this;
+    if (gateway is GatewayFilesApi) return gateway as GatewayFilesApi;
+    throw UnsupportedError('This gateway does not provide file transfer.');
+  }
+}
+
 /// Screen transport access kept as an extension so lightweight [GatewayApi]
 /// test implementations do not acquire protocol or socket responsibilities.
 extension GatewayScreenApi on GatewayApi {
@@ -56,7 +74,7 @@ extension GatewayScreenApi on GatewayApi {
 
 /// The real gateway implementation, with only the access token kept in
 /// memory; durable refresh-token storage remains the device layer's decision.
-class GatewayClient implements GatewayApi {
+class GatewayClient implements GatewayApi, GatewayFilesApi {
   factory GatewayClient({
     required Uri baseUrl,
     http.Client? httpClient,
@@ -159,6 +177,45 @@ class GatewayClient implements GatewayApi {
     return UnitTelemetry.fromJson(
       _jsonObject(await response.stream.bytesToString()),
     );
+  }
+
+  String _filesPath(String unit, [String? name]) {
+    final root = '/api/units/${Uri.encodeComponent(unit)}/files';
+    return name == null ? root : '$root/${Uri.encodeComponent(name)}';
+  }
+
+  @override
+  Future<List<UnitFile>> files(String unit) async => _list(
+    await _authenticated(() => http.Request('GET', _uri(_filesPath(unit)))),
+    UnitFile.fromJson,
+  );
+
+  @override
+  Future<void> uploadFile(String unit, String name, Uint8List bytes) async {
+    final query = <String, String>{'name': name};
+    final response = await _authenticated(() {
+      final request = http.Request('POST', _uri(_filesPath(unit), query));
+      request.headers['Content-Type'] = 'application/octet-stream';
+      request.bodyBytes = bytes;
+      return request;
+    });
+    await response.stream.drain<void>();
+  }
+
+  @override
+  Future<Uint8List> downloadFile(String unit, String name) async {
+    final response = await _authenticated(
+      () => http.Request('GET', _uri(_filesPath(unit, name))),
+    );
+    return response.stream.toBytes();
+  }
+
+  @override
+  Future<void> removeFile(String unit, String name) async {
+    final response = await _authenticated(
+      () => http.Request('DELETE', _uri(_filesPath(unit, name))),
+    );
+    await response.stream.drain<void>();
   }
 
   @override
