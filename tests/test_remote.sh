@@ -34,9 +34,16 @@ remote.turn_screen_off=1
 remote.show_touches=0
 EOF
 
-# A fake Android runtime stays alive long enough to exercise PID ownership.
-cat > "$WORK/bin/app_process" <<'EOF'
+export RACKPHONE_PROC_ROOT="$WORK/proc-root"
+mkdir -p "$RACKPHONE_PROC_ROOT/proc/net"
+: > "$RACKPHONE_PROC_ROOT/proc/net/unix"
+
+# A fake Android runtime that does what the real server does in the one respect
+# start waits on: it binds its abstract socket, which here means announcing
+# itself in the prefixed /proc tree, and then stays alive.
+cat > "$WORK/bin/app_process" <<EOF
 #!/bin/sh
+printf '0000: 00000002 0 00010000 1 1 0 @scrcpy\n' >> "$RACKPHONE_PROC_ROOT/proc/net/unix"
 exec sleep 300
 EOF
 chmod +x "$WORK/bin/app_process"
