@@ -1,3 +1,5 @@
+import java.util.Properties
+
 plugins {
     id("com.android.application")
     // The Flutter Gradle Plugin must be applied after the Android and Kotlin Gradle plugins.
@@ -19,10 +21,7 @@ android {
     }
 
     defaultConfig {
-        // TODO: Specify your own unique Application ID (https://developer.android.com/studio/build/application-id.html).
         applicationId = "com.nktkln.rackphone.client"
-        // You can update the following values to match your application needs.
-        // For more information, see: https://flutter.dev/to/review-gradle-config.
         // Matches the companion: API 26 is where the Keystore-backed storage and
         // the notification behaviour this app relies on are dependable.
         minSdk = 26
@@ -31,11 +30,37 @@ android {
         versionName = flutter.versionName
     }
 
+    signingConfigs {
+        // A release identity, when one exists. `android/key.properties` is not
+        // tracked and holds the store path and its passwords; without it the
+        // build below falls back to the debug key so `flutter run --release`
+        // still works on your own device.
+        create("release") {
+            val properties = rootProject.file("key.properties")
+            if (properties.exists()) {
+                val key = Properties()
+                properties.inputStream().use(key::load)
+                storeFile = file(key.getProperty("storeFile"))
+                storePassword = key.getProperty("storePassword")
+                keyAlias = key.getProperty("keyAlias")
+                keyPassword = key.getProperty("keyPassword")
+            }
+        }
+    }
+
     buildTypes {
         release {
-            // TODO: Add your own signing config for the release build.
-            // Signing with the debug keys for now, so `flutter run --release` works.
-            signingConfig = signingConfigs.getByName("debug")
+            // Debug-signed until a key exists. That is fine for running on the
+            // phone in your hand and wrong for anything installed anywhere
+            // else: an app cannot later be upgraded in place across a change of
+            // signing identity, so distributing a debug-signed build is a
+            // decision that outlives the build.
+            signingConfig =
+                if (rootProject.file("key.properties").exists()) {
+                    signingConfigs.getByName("release")
+                } else {
+                    signingConfigs.getByName("debug")
+                }
         }
     }
 

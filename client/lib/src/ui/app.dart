@@ -21,6 +21,7 @@ class RackphoneApp extends StatefulWidget {
 
 class _RackphoneAppState extends State<RackphoneApp> {
   SessionStatus _lastStatus = SessionStatus.unknown;
+  String? _deliveryFailure;
 
   @override
   void initState() {
@@ -48,9 +49,13 @@ class _RackphoneAppState extends State<RackphoneApp> {
         await FlutterForegroundTask.requestNotificationPermission();
       }
       await EventService.start(widget.sessionController.tokenStore);
-    } catch (_) {
-      // Delivery setup must not replace a valid signed-in screen with a crash;
-      // the next session transition can try the platform boundary again.
+      if (mounted) setState(() => _deliveryFailure = null);
+    } catch (failure) {
+      // Not swallowed. A crash must not replace a perfectly good signed-in
+      // screen, but silence here is worse than either: the app goes on looking
+      // connected while nothing will ever arrive, and only a session change
+      // would have retried it. Say so, and offer the retry.
+      if (mounted) setState(() => _deliveryFailure = '$failure');
     }
   }
 
@@ -78,6 +83,30 @@ class _RackphoneAppState extends State<RackphoneApp> {
     super.dispose();
   }
 
+  /// Puts a failed live connection where it can be seen and retried.
+  Widget _withDeliveryBanner(Widget child) {
+    final failure = _deliveryFailure;
+    if (failure == null) return child;
+    return Column(
+      children: <Widget>[
+        MaterialBanner(
+          content: Text('Notifications are not running: $failure'),
+          actions: <Widget>[
+            TextButton(
+              onPressed: () => unawaited(_beginLiveDelivery()),
+              child: const Text('Try again'),
+            ),
+            TextButton(
+              onPressed: () => setState(() => _deliveryFailure = null),
+              child: const Text('Dismiss'),
+            ),
+          ],
+        ),
+        Expanded(child: child),
+      ],
+    );
+  }
+
   @override
   Widget build(BuildContext context) => MaterialApp(
     title: 'Rackphone',
@@ -99,8 +128,8 @@ class _RackphoneAppState extends State<RackphoneApp> {
             controller: widget.sessionController,
             busy: true,
           ),
-          SessionStatus.signedIn => HomePage(
-            controller: widget.sessionController,
+          SessionStatus.signedIn => _withDeliveryBanner(
+            HomePage(controller: widget.sessionController),
           ),
           SessionStatus.offline => _OfflinePage(
             controller: widget.sessionController,

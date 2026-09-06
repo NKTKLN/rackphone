@@ -33,3 +33,7 @@ tmp/
 
 # Kotlin build cache, written beside the Gradle project.
 .kotlin/
+
+# A release signing identity is the developer's, not the repository's.
+client/android/key.properties
+app/android/key.properties
