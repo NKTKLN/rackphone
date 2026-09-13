@@ -5,6 +5,19 @@ import android.content.Context
 import android.content.Intent
 import android.telephony.TelephonyManager
 import org.json.JSONObject
+import java.io.File
+import java.util.UUID
+
+/** Plain call states kept outside Android so their event decisions stay testable. */
+enum class CallState { IDLE, RINGING, OFFHOOK }
+
+/** A ringing event belongs only to the transition into ringing, not its repeats. */
+fun shouldRecordRinging(wasRinging: Boolean, state: CallState): Boolean =
+    !wasRinging && state == CallState.RINGING
+
+/** Preserve a new call's id until its outcome; an existing id always wins. */
+fun correlatedCallId(existing: String, generated: String): String =
+    existing.ifEmpty { generated }
 
 /**
  * Incoming calls, reconstructed from the phone state.
@@ -49,9 +62,27 @@ class CallReceiver : BroadcastReceiver() {
         // The number is withheld without READ_CALL_LOG, and by a caller who
         // hides it. "unknown" keeps the event - that a call came in at all is
         // the part worth relaying.
-        config.ringingFrom = Numbers.sanitise(number) ?: UNKNOWN_CALLER
-        config.ringingSinceMs = System.currentTimeMillis()
+        val wasRinging = config.ringingFrom.isNotEmpty()
+        val from = Numbers.sanitise(number) ?: UNKNOWN_CALLER
+        val now = System.currentTimeMillis()
+        if (!shouldRecordRinging(wasRinging, CallState.RINGING)) return
+
+        val callId = correlatedCallId(callId(context), UUID.randomUUID().toString().take(12))
+        persistCallId(context, callId)
+        config.ringingFrom = from
+        config.ringingSinceMs = now
         config.callAnsweredMs = 0L
+        writeCurrentCall(context, from)
+
+        Inbox.record(
+            context,
+            JSONObject()
+                .put("kind", "call")
+                .put("address", if (from == UNKNOWN_CALLER) "" else from)
+                .put("ts", now)
+                .put("direction", "ringing")
+                .put("call_id", callId),
+        )
         HostFiles.writeStatus(context)
     }
 
@@ -59,9 +90,12 @@ class CallReceiver : BroadcastReceiver() {
         val from = config.ringingFrom
         val ringingSince = config.ringingSinceMs
         val answeredAt = config.callAnsweredMs
+        val callId = callId(context)
         config.ringingFrom = ""
         config.ringingSinceMs = 0L
         config.callAnsweredMs = 0L
+        persistCallId(context, "")
+        writeCurrentCall(context, "")
         if (from.isEmpty()) return
 
         val now = System.currentTimeMillis()
@@ -72,6 +106,7 @@ class CallReceiver : BroadcastReceiver() {
             .put("ts", if (ringingSince > 0L) ringingSince else now)
             .put("direction", if (answered) "in" else "missed")
             .put("duration", if (answered) (now - answeredAt) / 1000 else 0)
+            .put("call_id", callId)
 
         Inbox.record(context, event)
         HostFiles.writeStatus(context)
@@ -79,5 +114,25 @@ class CallReceiver : BroadcastReceiver() {
 
     private companion object {
         const val UNKNOWN_CALLER = "unknown"
+        const val PREFS = "rackphone"
+        const val KEY_CALL_ID = "ringing_call_id"
+        const val CURRENT_CALL = "current-call.env"
+
+        fun callId(context: Context): String =
+            context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+                .getString(KEY_CALL_ID, "").orEmpty()
+
+        /** Commit before spooling: the id must outlive a kill after this broadcast. */
+        fun persistCallId(context: Context, callId: String) {
+            context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+                .edit().putString(KEY_CALL_ID, callId).commit()
+        }
+
+        /** Root-readable current state lets status answer without draining events. */
+        fun writeCurrentCall(context: Context, from: String) {
+            val file = File(HostFiles.dir(context), CURRENT_CALL)
+            if (from.isEmpty()) file.delete()
+            else file.writeText("ringing=true\nringing_from=$from\n")
+        }
     }
 }

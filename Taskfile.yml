@@ -242,6 +242,7 @@ tasks:
       - adb shell pm grant com.nktkln.rackphone.companion android.permission.READ_PHONE_STATE
       - adb shell pm grant com.nktkln.rackphone.companion android.permission.READ_PHONE_NUMBERS
       - adb shell pm grant com.nktkln.rackphone.companion android.permission.CALL_PHONE
+      - adb shell pm grant com.nktkln.rackphone.companion android.permission.ANSWER_PHONE_CALLS
       # Without these two the system defers the app's alarms by up to a year:
       # a rack unit is never opened, which is the profile Android treats as
       # abandoned. Both are settable from the host, so no tap is involved.

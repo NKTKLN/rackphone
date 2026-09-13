@@ -131,6 +131,14 @@
       "label": "Send one message"
     },
     {
+      "id": "answer",
+      "label": "Answer ringing call"
+    },
+    {
+      "id": "reject",
+      "label": "Reject ringing call"
+    },
+    {
       "id": "keepalive",
       "label": "Send the keepalive now"
     },
@@ -148,6 +156,8 @@
     "ready",
     "pending",
     "dropped",
+    "ringing",
+    "ringing_from",
     "collecting",
     "listener",
     "alarms",

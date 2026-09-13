@@ -15,6 +15,8 @@ object Commands {
     const val ACTION_KEEPALIVE = "$PKG.KEEPALIVE"
     const val ACTION_STATUS = "$PKG.STATUS"
     const val ACTION_SETUP = "$PKG.SETUP"
+    const val ACTION_ANSWER = "$PKG.ANSWER"
+    const val ACTION_REJECT = "$PKG.REJECT"
 
     // The delivery contract with the host, in the same shape the shell
     // collector used: rotate, read, confirm.

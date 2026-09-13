@@ -15,6 +15,13 @@ echo "app=installed"
 echo "ready=$(app_status_value ready)"
 echo "pending=$(app_status_value pending)"
 echo "dropped=$(app_status_value dropped)"
+if [ -f "$APP_DATA/current-call.env" ]; then
+  echo "ringing=$(sed -n 's/^ringing=//p' "$APP_DATA/current-call.env" | tail -1)"
+  echo "ringing_from=$(sed -n 's/^ringing_from=//p' "$APP_DATA/current-call.env" | tail -1)"
+else
+  echo "ringing=false"
+  echo "ringing_from="
+fi
 echo "collecting=sms:$(app_status_value collect_sms),calls:$(app_status_value collect_calls),notifications:$(app_status_value collect_notifications)"
 # `settings get` reads a documented key with a stable format. dumpsys would need
 # its debug output parsed, which is what this project stopped doing for SMS - and

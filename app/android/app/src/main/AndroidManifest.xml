@@ -13,6 +13,8 @@
     <!-- USSD. sendUssdRequest is the only supported way to ask the network a
          question - balance, tariff - and it is gated on CALL_PHONE. -->
     <uses-permission android:name="android.permission.CALL_PHONE"/>
+    <!-- Runtime permission for accepting or ending a ringing call remotely. -->
+    <uses-permission android:name="android.permission.ANSWER_PHONE_CALLS"/>
 
     <!-- Receiving. RECEIVE_SMS is enough to be handed every arriving message;
          being the default SMS app would additionally mean owning the inbox,
@@ -65,6 +67,8 @@
                 <action android:name="com.nktkln.rackphone.companion.RESET"/>
                 <action android:name="com.nktkln.rackphone.companion.USSD"/>
                 <action android:name="com.nktkln.rackphone.companion.BALANCE"/>
+                <action android:name="com.nktkln.rackphone.companion.ANSWER"/>
+                <action android:name="com.nktkln.rackphone.companion.REJECT"/>
             </intent-filter>
         </receiver>
 

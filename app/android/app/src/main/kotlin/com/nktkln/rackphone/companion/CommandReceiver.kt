@@ -88,6 +88,16 @@ class CommandReceiver : BroadcastReceiver() {
 
             Commands.ACTION_STATUS -> reply(true, HostFiles.writeStatus(context))
 
+            Commands.ACTION_ANSWER -> {
+                val result = CallControl.answer(context)
+                reply(result.optString("status") == "answered", result)
+            }
+
+            Commands.ACTION_REJECT -> {
+                val result = CallControl.reject(context)
+                reply(result.optString("status") == "rejected", result)
+            }
+
             // Drain rotates the spool and reports how much is now in flight;
             // the batch itself is read from the file. A binder transaction is
             // the wrong place to carry two thousand messages, and the host is

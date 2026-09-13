@@ -40,6 +40,8 @@ case "${1:-}" in
     fi
     app_cmd SEND --es to "$2" --es body "$3"
     ;;
+  answer) app_cmd ANSWER ;;
+  reject) app_cmd REJECT ;;
   keepalive) app_cmd KEEPALIVE --es force true ;;
   # The reply waits on the network, so this one is slower than the others by
   # design - the operator answers a USSD session in seconds, not instantly.

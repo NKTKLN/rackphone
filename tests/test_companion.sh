@@ -38,6 +38,8 @@ collect_calls=true
 include_body=true
 pending=3
 dropped=7
+ringing=true
+ringing_from=+15550003
 keepalive_enabled=true
 keepalive_subs=all
 keepalive_interval_hours=720
@@ -61,6 +63,7 @@ ENV
   sed -i "s/CHECKED/$(( ($(date +%s) - 3600) * 1000 ))/" "$APP_DIR/status.env"
   printf '{"kind":"sms","id":1,"address":"+15550001","body":"one"}\n' > "$APP_DIR/inbox.inflight"
   printf '{"kind":"call","id":2,"address":"+15550002","direction":"missed"}\n' > "$APP_DIR/inbox.jsonl"
+  printf 'ringing=true\nringing_from=+15550003\n' > "$APP_DIR/current-call.env"
 }
 
 act() { sh "$RP/action.sh" "$@" 2>&1; }
@@ -112,6 +115,8 @@ assert_contains "app presence"      "$OUT" "app=installed"
 assert_contains "readiness"         "$OUT" "ready=true"
 assert_contains "spool depth"       "$OUT" "pending=3"
 assert_contains "drops"             "$OUT" "dropped=7"
+assert_contains "ringing state"     "$OUT" "ringing=true"
+assert_contains "ringing caller"    "$OUT" "ringing_from=+15550003"
 assert_contains "what is collected" "$OUT" "collecting=sms:true,calls:true"
 assert_contains "sent tally"        "$OUT" "sent=11ok/2failed"
 assert_contains "balance per SIM"   "$OUT" "balance=sub1:123.45 sub3:-57"
@@ -157,6 +162,16 @@ reset_app
 OUT=$(act balance)
 assert_contains "BALANCE is broadcast" "$(sent)" "com.nktkln.rackphone.companion.BALANCE"
 assert_contains "forced, because a person asked" "$(sent)" "--es force true"
+
+section "Ringing calls can be answered and rejected"
+reset_app
+OUT=$(STUB_AM_DATA='{"status":"answered"}' act answer)
+assert_contains "ANSWER is broadcast" "$(sent)" "com.nktkln.rackphone.companion.ANSWER"
+assert_contains "answer outcome is passed through" "$OUT" '"status":"answered"'
+reset_app
+OUT=$(STUB_AM_DATA='{"status":"rejected"}' act reject)
+assert_contains "REJECT is broadcast" "$(sent)" "com.nktkln.rackphone.companion.REJECT"
+assert_contains "reject outcome is passed through" "$OUT" '"status":"rejected"'
 
 section "Reload pushes the declared settings, in precedence order"
 reset_app
