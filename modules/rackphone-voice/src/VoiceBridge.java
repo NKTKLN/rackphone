@@ -5,6 +5,7 @@ import android.media.AudioRecord;
 import android.media.AudioTrack;
 import android.net.LocalServerSocket;
 import android.net.LocalSocket;
+import android.os.Looper;
 
 import java.io.InputStream;
 import java.io.OutputStream;
@@ -20,6 +21,11 @@ public final class VoiceBridge {
 
     public static void main(String[] args) {
         try {
+            // AudioManager builds a Handler the moment it is fetched, and a
+            // Handler needs a Looper on this thread. app_process gives none, so
+            // prepare one here; the bridge never runs the loop because it does
+            // blocking reads and writes rather than waiting on callbacks.
+            if (Looper.myLooper() == null) Looper.prepareMainLooper();
             Context context = systemContext();
             AudioManager audio = (AudioManager) context.getSystemService(Context.AUDIO_SERVICE);
             if (args.length == 1 && "--probe".equals(args[0])) {
