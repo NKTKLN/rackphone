@@ -11,6 +11,10 @@ ROOT=$(cd "$(dirname "$0")/.." && pwd)
 OUT=${1:-$ROOT/dist}
 mkdir -p "$OUT"
 
+# The voice module is source-owned; always package a dex produced from the
+# checked-out Java instead of whatever artifact a previous build left behind.
+bash "$ROOT/modules/rackphone-voice/build.sh"
+
 for module in "$ROOT"/modules/*/; do
   id=$(basename "$module")
   plugin_json="$module/rackphone/plugin.json"

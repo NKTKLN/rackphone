@@ -5,6 +5,9 @@ set -uo pipefail
 HERE=$(cd "$(dirname "$0")" && pwd)
 REPO=$(cd "$HERE/.." && pwd)
 RC=0
+# CI and sandboxed checkouts may expose a read-only home cache. Keep uv's
+# disposable lock and wheels in /tmp unless the caller chose a cache explicitly.
+export UV_CACHE_DIR=${UV_CACHE_DIR:-/tmp/rackphone-uv-cache}
 
 banner() { printf '\n\033[1;36m━━━ %s ━━━\033[0m\n' "$1"; }
 
@@ -51,7 +54,7 @@ print("  defaults.env agrees with plugin.json" if not bad else "")
 sys.exit(bad)
 PY
 
-for t in test_resolve test_metrics test_battery test_companion test_remote; do
+for t in test_resolve test_metrics test_battery test_companion test_remote test_voice; do
   banner "${t#test_}"
   bash "$HERE/$t.sh" || RC=1
 done
