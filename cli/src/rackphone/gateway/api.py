@@ -41,6 +41,7 @@ from rackphone.gateway.auth import (
     AccessClaims,
     verify_password,
 )
+from rackphone.gateway.call import CallError, answer_call, reject_call
 from rackphone.gateway.config import (
     DEFAULT_TRUSTED_PROXIES,
     GatewayConfig,
@@ -883,6 +884,28 @@ def create_app(  # noqa: C901, PLR0913, PLR0915, PLR0917
             int(time.time()), "send_sms", subject=body.unit, detail=f"to={body.to}"
         )
         return answer
+
+    @app.post("/api/units/{unit}/call/answer", dependencies=control_auth)
+    def answer_unit_call(unit: str) -> dict[str, Any]:
+        """Answer the ringing call on a unit authorised for calls."""
+        calls_unit(unit)
+        try:
+            outcome = answer_call(unit)
+        except CallError as exc:
+            raise translate_device_error(exc) from exc
+        login.store.record_audit(int(time.time()), "answer_call", subject=unit)
+        return outcome
+
+    @app.post("/api/units/{unit}/call/reject", dependencies=control_auth)
+    def reject_unit_call(unit: str) -> dict[str, Any]:
+        """Reject the ringing call on a unit authorised for calls."""
+        calls_unit(unit)
+        try:
+            outcome = reject_call(unit)
+        except CallError as exc:
+            raise translate_device_error(exc) from exc
+        login.store.record_audit(int(time.time()), "reject_call", subject=unit)
+        return outcome
 
     @app.get("/api/stream", dependencies=read_auth)
     async def stream_events() -> StreamingResponse:
