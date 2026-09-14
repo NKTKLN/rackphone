@@ -112,7 +112,7 @@ class TestLoading:
 
     def test_unit_without_section_gets_every_capability(self) -> None:
         assert GatewayConfig().capabilities_for("legacy") == frozenset(
-            {"sms", "notifications", "screen", "files"}
+            {"sms", "notifications", "screen", "files", "calls"}
         )
 
     @pytest.mark.parametrize(

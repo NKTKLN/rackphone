@@ -30,7 +30,7 @@ from rackphone.gateway.config import AdminConfig, GatewayConfig, NtfyConfig
 from rackphone.gateway.drain import MessageGateway
 from rackphone.gateway.login import LoginService
 from rackphone.gateway.presence import ClientPresence
-from rackphone.gateway.session import SessionManager
+from rackphone.gateway.session import ScreenSession, SessionBusy, SessionManager
 from rackphone.gateway.store import EventStore
 
 HTTP_OK = 200
@@ -501,7 +501,13 @@ def test_units_are_listed_with_their_capabilities(
     assert [row["name"] for row in rows] == ["lisa01", "lisa02"]
     assert rows[0]["label"] == "Front rack"
     # Undeclared means every capability; declared means exactly what was said.
-    assert rows[0]["capabilities"] == ["files", "notifications", "screen", "sms"]
+    assert rows[0]["capabilities"] == [
+        "calls",
+        "files",
+        "notifications",
+        "screen",
+        "sms",
+    ]
     assert rows[1]["capabilities"] == ["sms"]
     auth_store.close()
 
@@ -743,6 +749,115 @@ def test_the_screen_socket_owns_its_session(
             assert refused.value.reason.startswith(api.SESSION_BUSY_REASON)
             assert released()
         auth_store.close()
+
+
+def test_call_audio_route_handles_success_busy_and_capability(  # noqa: C901
+    populated_store: EventStore,
+    tmp_path: Path,
+    repo: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Apply call policy and relay an owned session through the voice path."""
+    (repo / "units" / "lisa01.env").write_text("")
+    (repo / "units" / "screen-only.env").write_text("")
+    config = GatewayConfig(
+        admin=AdminConfig("admin", hash_password("right")),
+        # screen-only is declared without calls: an undeclared unit would carry
+        # every capability, so denial can only be shown by an explicit set.
+        unit_capabilities={
+            "lisa01": frozenset({"calls"}),
+            "screen-only": frozenset({"screen"}),
+        },
+    )
+    auth_store = AuthStore(tmp_path / "auth.db")
+    login = LoginService(config, auth_store)
+    granted = login.log_in("admin", "right", "peer", "tablet", 1000)
+    assert granted.tokens is not None
+    headers = {"Authorization": f"Bearer {granted.tokens.access}"}
+    monkeypatch.setattr(api.time, "time", lambda: 1000)
+
+    class FakeVoiceSessions:
+        """Record route ownership without touching adb."""
+
+        def __init__(self) -> None:
+            self.current: ScreenSession | None = None
+            self.busy = False
+            self.clock = lambda: 1000
+
+        def acquire(self, unit: str, holder: str, now: int) -> ScreenSession:
+            if self.busy:
+                raise SessionBusy("laptop", 900, "call")
+            self.current = ScreenSession(unit, holder, now, now, "43123")
+            return self.current
+
+        def heartbeat(
+            self, _unit: str, _now: int, _holder: str | None = None
+        ) -> ScreenSession | None:
+            return self.current
+
+        def get(self, _unit: str) -> ScreenSession | None:
+            return self.current
+
+        def release(self, _unit: str, _now: int) -> None:
+            self.current = None
+
+    fake_sessions = FakeVoiceSessions()
+    relayed: list[str] = []
+
+    class FakeVoiceRelay:
+        """Record the relay lifecycle and finish immediately."""
+
+        def __init__(self, host: str, port: int) -> None:
+            relayed.append(f"init:{host}:{port}")
+
+        async def open(self) -> None:
+            relayed.append("open")
+
+        async def pump(self, websocket: Any, heartbeat: Any = None) -> None:
+            del heartbeat
+            relayed.append("pump")
+            await websocket.receive()
+
+        async def close(self) -> None:
+            relayed.append("close")
+
+    monkeypatch.setattr(api, "SessionManager", lambda **_kwargs: fake_sessions)
+    monkeypatch.setattr(api, "VoiceRelay", FakeVoiceRelay)
+    app = create_app(config, populated_store, login, sessions=SessionManager())
+    # FastAPI resolves postponed annotations against module globals when the
+    # test server starts, so leave the real class there after construction.
+    monkeypatch.setattr(api, "SessionManager", SessionManager)
+
+    with TestClient(app) as client:
+        with client.websocket_connect(
+            "/api/units/lisa01/call/audio", headers=headers
+        ):
+            pass
+        assert "pump" in relayed
+        assert fake_sessions.current is None
+
+        fake_sessions.busy = True
+        with (
+            pytest.raises(WebSocketDisconnect) as refused,
+            client.websocket_connect(
+                "/api/units/lisa01/call/audio", headers=headers
+            ),
+        ):
+            pass
+        assert refused.value.code == HTTP_WEBSOCKET_POLICY
+        assert refused.value.reason == f"{api.SESSION_BUSY_REASON} laptop"
+
+        with (
+            pytest.raises(WebSocketDisconnect) as denied,
+            client.websocket_connect(
+                "/api/units/screen-only/call/audio", headers=headers
+            ),
+        ):
+            pass
+        assert denied.value.code == HTTP_WEBSOCKET_POLICY
+        assert denied.value.reason == "unit capability denied"
+
+    auth_store.close()
 
 
 def test_the_session_holder_cannot_be_named_by_the_caller(

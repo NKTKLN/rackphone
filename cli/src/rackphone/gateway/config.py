@@ -29,7 +29,9 @@ DEFAULT_TRUSTED_PROXIES = ["127.0.0.1", "::1"]
 DEFAULT_NTFY_TIMEOUT_SECONDS = 10.0
 DEFAULT_NTFY_RETRIES = 3
 DEFAULT_RETENTION = {"sms": 0, "call": 0, "notification": 30}
-VALID_CAPABILITIES = frozenset({"sms", "notifications", "screen", "files"})
+VALID_CAPABILITIES = frozenset(
+    {"sms", "notifications", "screen", "files", "calls"}
+)
 
 
 class GatewayConfigError(ValueError):

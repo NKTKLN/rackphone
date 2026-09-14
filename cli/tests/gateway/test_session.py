@@ -52,6 +52,27 @@ def test_second_acquire_names_the_current_holder() -> None:
     assert caught.value.started_at == 100
 
 
+def test_voice_manager_uses_its_device_protocol_and_kind(
+    device_calls: list[tuple[str, ...]],
+) -> None:
+    """Use voice actions, the voice socket, and call ownership wording."""
+    manager = SessionManager(
+        plugin="voice", socket="localabstract:rackphone-voice", kind="call"
+    )
+    manager.acquire("one", "tablet", 100)
+    with pytest.raises(SessionBusy, match="call held by tablet since 100"):
+        manager.acquire("one", "laptop", 101)
+    manager.release("one", 102)
+    assert ("SERIAL", "action", "voice", "start") in device_calls
+    assert (
+        "SERIAL",
+        "forward",
+        "tcp:0",
+        "localabstract:rackphone-voice",
+    ) in device_calls
+    assert ("SERIAL", "action", "voice", "stop") in device_calls
+
+
 def test_heartbeat_keeps_a_session_alive() -> None:
     """Use the refreshed timestamp when deciding what the reaper closes."""
     manager = SessionManager()

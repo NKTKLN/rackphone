@@ -32,14 +32,17 @@ class ScreenSession:
 class SessionBusy(RuntimeError):
     """Raised when a fresh session already owns the requested unit."""
 
-    def __init__(self, holder: str, started_at: int) -> None:
+    def __init__(
+        self, holder: str, started_at: int, kind: str = "screen"
+    ) -> None:
         """Remember who owns the conflicting session and since when.
 
         Args:
             holder: Device label holding the screen.
             started_at: Unix timestamp at which ownership began.
+            kind: Name of the resource whose ownership conflicts.
         """
-        super().__init__(f"screen held by {holder} since {started_at}")
+        super().__init__(f"{kind} held by {holder} since {started_at}")
         self.holder = holder
         self.started_at = started_at
 
@@ -47,13 +50,25 @@ class SessionBusy(RuntimeError):
 class SessionManager:
     """Serialize screen ownership and mirror it onto the attached devices."""
 
-    def __init__(self, clock: Callable[[], int] | None = None) -> None:
+    def __init__(
+        self,
+        clock: Callable[[], int] | None = None,
+        plugin: str = REMOTE_PLUGIN,
+        socket: str = REMOTE_SOCKET,
+        kind: str = "screen",
+    ) -> None:
         """Initialize an empty session set.
 
         Args:
             clock: Current Unix time provider; defaults to the system clock.
+            plugin: Device plugin started and stopped for a session.
+            socket: Device socket exposed through the adb forward.
+            kind: Resource name used in ownership-conflict messages.
         """
         self.clock = clock or (lambda: int(time.time()))
+        self.plugin = plugin
+        self.socket = socket
+        self.kind = kind
         self._lock = threading.RLock()
         self._sessions: dict[str, ScreenSession] = {}
         self._forwards: dict[str, str] = {}
@@ -83,19 +98,19 @@ class SessionManager:
             if current is not None and (
                 now - current.last_seen <= HEARTBEAT_TIMEOUT_SECONDS
             ):
-                raise SessionBusy(current.holder, current.started_at)
+                raise SessionBusy(current.holder, current.started_at, self.kind)
             if current is not None:
                 self._release_locked(unit, now)
 
             serial = self._serial(unit)
-            adb.run_device_cli(serial, ["action", REMOTE_PLUGIN, "start"])
+            adb.run_device_cli(serial, ["action", self.plugin, "start"])
             try:
-                port = adb.forward(serial, "tcp:0", REMOTE_SOCKET)
+                port = adb.forward(serial, "tcp:0", self.socket)
             except Exception:
                 # A server without its host tunnel has no viewer but still heats
                 # the phone, so a partial acquisition is closed immediately.
                 try:
-                    adb.run_device_cli(serial, ["action", REMOTE_PLUGIN, "stop"])
+                    adb.run_device_cli(serial, ["action", self.plugin, "stop"])
                 except Exception as exc:
                     render.warn(f"{unit}: remote cleanup failed: {exc}")
                 raise
@@ -159,7 +174,7 @@ class SessionManager:
         try:
             # Stop is called even without a bookkeeping record: the missing
             # record may itself be the reason an encoder was orphaned.
-            adb.run_device_cli(serial, ["action", REMOTE_PLUGIN, "stop"])
+            adb.run_device_cli(serial, ["action", self.plugin, "stop"])
         except Exception as exc:
             render.warn(f"{unit}: remote stop failed: {exc}")
 

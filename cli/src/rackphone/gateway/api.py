@@ -72,6 +72,7 @@ from rackphone.gateway.store import (
     MAX_QUERY_LIMIT,
     EventStore,
 )
+from rackphone.gateway.voice import VoiceRelay
 from rackphone.metrics.exposition import collect_unit_metrics, parse_samples
 
 STREAM_POLL_SECONDS = 2.0
@@ -228,6 +229,9 @@ def create_app(  # noqa: C901, PLR0913, PLR0915, PLR0917
     legacy_enabled = bool(config.api_token and is_loopback(config.api_host))
     client_presence = presence or ClientPresence()
     screen_sessions = sessions or SessionManager()
+    voice_sessions = SessionManager(
+        plugin="voice", socket="localabstract:rackphone-voice", kind="call"
+    )
     if config.api_token and not legacy_enabled:
         # Removing this outright would break the running compose deployment;
         # honouring it on a public bind would leave a shared static secret
@@ -299,6 +303,13 @@ def create_app(  # noqa: C901, PLR0913, PLR0915, PLR0917
         if "screen" not in config.capabilities_for(unit):
             raise HTTPException(HTTPStatus.FORBIDDEN, "unit capability denied")
 
+    def calls_unit(unit: str) -> None:
+        """Require a configured unit with the calls capability."""
+        if not any(item.name == unit for item in units.load_all_units()):
+            raise HTTPException(HTTPStatus.NOT_FOUND, "unknown unit")
+        if "calls" not in config.capabilities_for(unit):
+            raise HTTPException(HTTPStatus.FORBIDDEN, "unit capability denied")
+
     def files_unit(unit: str) -> None:
         """Require a configured unit with the files capability."""
         if not any(item.name == unit for item in units.load_all_units()):
@@ -322,14 +333,16 @@ def create_app(  # noqa: C901, PLR0913, PLR0915, PLR0917
         )
         return HTTPException(status, str(error))
 
-    async def relay_heartbeat(unit: str, holder: str) -> None:
-        """Keep a WebSocket-owned screen lease fresh while it remains open."""
+    async def relay_heartbeat(
+        manager: SessionManager, unit: str, holder: str
+    ) -> None:
+        """Keep a WebSocket-owned lease fresh while it remains open."""
         while True:
             await asyncio.sleep(SCREEN_HEARTBEAT_SECONDS)
             refreshed = await asyncio.to_thread(
-                screen_sessions.heartbeat,
+                manager.heartbeat,
                 unit,
-                screen_sessions.clock(),
+                manager.clock(),
                 holder,
             )
             if refreshed is None:
@@ -512,7 +525,7 @@ def create_app(  # noqa: C901, PLR0913, PLR0915, PLR0917
             await websocket.accept()
             await relay.pump(
                 websocket,
-                heartbeat=lambda: relay_heartbeat(unit, holder),
+                heartbeat=lambda: relay_heartbeat(screen_sessions, unit, holder),
             )
             await websocket.close()
         except Exception:
@@ -530,6 +543,51 @@ def create_app(  # noqa: C901, PLR0913, PLR0915, PLR0917
                 # the pump unwinds. The old socket must not release the new
                 # owner, which is what the comparison above is for.
                 screen_sessions.release(unit, screen_sessions.clock())
+            if relay is not None:
+                with contextlib.suppress(Exception):
+                    await relay.close()
+
+    @app.websocket("/api/units/{unit}/call/audio")
+    async def relay_call_audio(websocket: WebSocket, unit: str) -> None:
+        """Hold a call session and relay its opaque bidirectional audio."""
+        try:
+            holder = control_holder(websocket.headers.get("authorization", ""))
+            calls_unit(unit)
+        except HTTPException as exc:
+            await websocket.close(code=1008, reason=str(exc.detail))
+            return
+
+        relay: VoiceRelay | None = None
+        session = None
+        acquired = False
+        try:
+            try:
+                session = await asyncio.to_thread(
+                    voice_sessions.acquire,
+                    unit,
+                    holder,
+                    voice_sessions.clock(),
+                )
+                acquired = True
+            except SessionBusy as exc:
+                holder = exc.holder[:64]
+                await websocket.close(
+                    code=1008, reason=f"{SESSION_BUSY_REASON} {holder}"
+                )
+                return
+            relay = VoiceRelay("127.0.0.1", int(session.local_port))
+            await relay.open()
+            await websocket.accept()
+            await relay.pump(
+                websocket,
+                heartbeat=lambda: relay_heartbeat(voice_sessions, unit, holder),
+            )
+            await websocket.close()
+        except Exception:
+            await websocket.close(code=1011, reason="call audio relay ended")
+        finally:
+            if acquired and voice_sessions.get(unit) == session:
+                voice_sessions.release(unit, voice_sessions.clock())
             if relay is not None:
                 with contextlib.suppress(Exception):
                     await relay.close()
