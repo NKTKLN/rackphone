@@ -19,10 +19,11 @@ else
   echo "bridge=idle"
 fi
 
-# Probe the same reflected API the bridge will call; model or SDK guesses hide
-# the HAL refusal that an operator needs to see before diagnosing silent audio.
-if [ -s "$DEX" ] && CLASSPATH="$DEX" app_process / VoiceBridge --probe 2>/dev/null | grep -q '^interceptable=yes$'; then
-  echo "interceptable=yes"
+# Construct the capture and playback endpoints the bridge uses; a model or SDK
+# guess would hide the audio refusal an operator needs to see before diagnosing
+# a silent call. This needs no active call - the endpoints build in any mode.
+if [ -s "$DEX" ] && CLASSPATH="$DEX" app_process / VoiceBridge --probe 2>/dev/null | grep -q '^ready=yes$'; then
+  echo "audio=ready"
 else
-  echo "interceptable=no"
+  echo "audio=unavailable"
 fi

@@ -7,12 +7,12 @@
     {
       "key": "sample_rate",
       "type": "int",
-      "default": "16000",
+      "default": "48000",
       "min": 8000,
       "max": 48000,
-      "label": "Requested sample rate",
+      "label": "Capture sample rate",
       "unit": "Hz",
-      "help": "Telephony normally uses 16 kHz; the bridge asks for this rate and uses the rate the returned Android audio endpoints report."
+      "help": "The bridge captures downlink and plays uplink at this rate; 48 kHz is what the in-call-music path is proven to carry on this device."
     },
     {
       "key": "enabled",
@@ -27,5 +27,5 @@
     { "id": "stop", "label": "Stop the call audio bridge" },
     { "id": "status", "label": "Show bridge status" }
   ],
-  "status": ["bridge", "pid", "interceptable"]
+  "status": ["bridge", "pid", "audio"]
 }

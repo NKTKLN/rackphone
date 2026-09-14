@@ -1,116 +1,187 @@
-import android.content.Context;
+import android.media.AudioAttributes;
 import android.media.AudioFormat;
-import android.media.AudioManager;
 import android.media.AudioRecord;
 import android.media.AudioTrack;
+import android.media.MediaRecorder;
 import android.net.LocalServerSocket;
 import android.net.LocalSocket;
 import android.os.Looper;
 
 import java.io.InputStream;
 import java.io.OutputStream;
-import java.lang.reflect.InvocationTargetException;
-import java.lang.reflect.Method;
 import java.util.concurrent.atomic.AtomicBoolean;
 
-/** A dependency-free, one-call PSTN PCM bridge launched by app_process. */
+/**
+ * A dependency-free, one-call two-way PSTN audio bridge launched by app_process.
+ *
+ * The Android call-audio interception @SystemApi is a dead end on this device:
+ * getCallUplinkInjectionAudioTrack drains and routes to TYPE_TELEPHONY, yet the
+ * far party hears nothing. What works instead, proven live on this unit, is the
+ * vendor in-call-music path:
+ *   downlink  = AudioRecord(VOICE_DOWNLINK)          - the far party's voice.
+ *   uplink    = AudioTrack(USAGE_MEDIA) mixed into   - what the far party hears,
+ *               the call by the Qualcomm mixer          enabled with tinymix.
+ *               "Incall_Music Audio Mixer MultiMediaN".
+ * Both run in the ordinary in-call mode; no setMode, no reflection, no context.
+ */
 public final class VoiceBridge {
     private static final String SOCKET_NAME = "rackphone-voice";
+    private static final int DEFAULT_RATE = 48000;
+
+    // The media stream lands on one of these front-ends; which one is not
+    // deterministic, so every candidate route into the call uplink is opened.
+    // Controls are addressed by name because their numeric ids shift per boot.
+    private static final String[] MIXER_CONTROLS = {
+        "Incall_Music Audio Mixer MultiMedia1",
+        "Incall_Music Audio Mixer MultiMedia2",
+        "Incall_Music Audio Mixer MultiMedia4",
+        "Incall_Music Audio Mixer MultiMedia5",
+        "Incall_Music Audio Mixer MultiMedia9",
+        "Incall_Music_2 Audio Mixer MultiMedia1",
+        "Incall_Music_2 Audio Mixer MultiMedia2",
+        "Incall_Music_2 Audio Mixer MultiMedia5",
+        "Incall_Music_2 Audio Mixer MultiMedia9",
+    };
 
     private VoiceBridge() {}
 
     public static void main(String[] args) {
         try {
-            // AudioManager builds a Handler the moment it is fetched, and a
-            // Handler needs a Looper on this thread. app_process gives none, so
-            // prepare one here; the bridge never runs the loop because it does
-            // blocking reads and writes rather than waiting on callbacks.
+            // AudioRecord/AudioTrack construct their own Handlers, which need a
+            // Looper on this thread that app_process does not provide.
             if (Looper.myLooper() == null) Looper.prepareMainLooper();
-            Context context = systemContext();
-            AudioManager audio = (AudioManager) context.getSystemService(Context.AUDIO_SERVICE);
-            if (args.length == 1 && "--probe".equals(args[0])) {
-                System.out.println("interceptable=" + (isInterceptable(audio) ? "yes" : "no"));
+            int rate = DEFAULT_RATE;
+            boolean probe = false;
+            for (String arg : args) {
+                if ("--probe".equals(arg)) probe = true;
+                else rate = Integer.parseInt(arg);
+            }
+            if (probe) {
+                probe(rate);
                 return;
             }
-            int requestedRate = args.length == 1 ? Integer.parseInt(args[0]) : 16000;
-            run(audio, requestedRate);
+            run(rate);
         } catch (Throwable failure) {
             // Logs are operator-facing: keep every failure to one grep-friendly line.
-            Throwable cause = failure instanceof InvocationTargetException
-                    && failure.getCause() != null ? failure.getCause() : failure;
-            System.err.println("voice bridge: " + cause.getClass().getSimpleName() + ": "
-                    + String.valueOf(cause.getMessage()).replace('\n', ' '));
+            System.err.println("voice bridge: " + failure.getClass().getSimpleName() + ": "
+                    + String.valueOf(failure.getMessage()).replace('\n', ' '));
             System.exit(1);
         }
     }
 
-    private static Context systemContext() throws Exception {
-        // Proven on this unit: constructing ActivityThread and calling
-        // getSystemContext() works under shell; systemMain() kills the process.
-        Class<?> type = Class.forName("android.app.ActivityThread");
-        Object thread = type.getDeclaredConstructor().newInstance();
-        Method getSystemContext = type.getDeclaredMethod("getSystemContext");
-        getSystemContext.setAccessible(true);
-        return (Context) getSystemContext.invoke(thread);
-    }
-
-    private static boolean isInterceptable(AudioManager audio) throws Exception {
-        // Proven on this unit: isPstnCallAudioInterceptable() returns true.
-        Method method = AudioManager.class.getMethod("isPstnCallAudioInterceptable");
-        return (Boolean) method.invoke(audio);
-    }
-
-    private static void run(AudioManager audio, int requestedRate) throws Exception {
-        if (!isInterceptable(audio)) {
-            throw new IllegalStateException("PSTN call audio is not interceptable");
-        }
-        AudioFormat format = new AudioFormat.Builder()
-                .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
-                .setChannelMask(AudioFormat.CHANNEL_IN_MONO)
-                .setSampleRate(requestedRate)
-                .build();
-
-        // Proven on this unit: these @SystemApi methods are reachable only by
-        // reflection, and both throw IllegalStateException unless a call is in
-        // progress, so failure here prevents a stale, half-open bridge.
-        Method extract = AudioManager.class.getMethod(
-                "getCallDownlinkExtractionAudioRecord", AudioFormat.class);
-        Method inject = AudioManager.class.getMethod(
-                "getCallUplinkInjectionAudioTrack", AudioFormat.class);
+    private static void probe(int rate) {
+        // Report readiness without a call: both endpoints construct in any mode,
+        // so this proves the audio path is reachable before an operator relies
+        // on it. The mixer is a tinymix control, checked separately in status.
         AudioRecord record = null;
         AudioTrack track = null;
+        try {
+            record = openDownlink(rate);
+            track = openUplink(rate);
+            boolean ready = record.getState() == AudioRecord.STATE_INITIALIZED
+                    && track.getState() == AudioTrack.STATE_INITIALIZED;
+            System.out.println("ready=" + (ready ? "yes" : "no"));
+        } catch (Throwable failure) {
+            System.out.println("ready=no");
+        } finally {
+            if (record != null) record.release();
+            if (track != null) track.release();
+        }
+    }
+
+    private static AudioRecord openDownlink(int rate) {
+        int size = Math.max(rate, AudioRecord.getMinBufferSize(
+                rate, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT));
+        AudioRecord record = new AudioRecord(MediaRecorder.AudioSource.VOICE_DOWNLINK,
+                rate, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT, size);
+        if (record.getState() != AudioRecord.STATE_INITIALIZED) {
+            // Some builds only expose the mixed call source; the far party still
+            // dominates it, so it is the right fallback for hearing them.
+            record.release();
+            record = new AudioRecord(MediaRecorder.AudioSource.VOICE_CALL,
+                    rate, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT, size);
+        }
+        return record;
+    }
+
+    private static AudioTrack openUplink(int rate) {
+        AudioAttributes attributes = new AudioAttributes.Builder()
+                .setUsage(AudioAttributes.USAGE_MEDIA)
+                .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
+                .build();
+        AudioFormat format = new AudioFormat.Builder()
+                .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
+                .setChannelMask(AudioFormat.CHANNEL_OUT_MONO)
+                .setSampleRate(rate)
+                .build();
+        int size = Math.max(rate, AudioTrack.getMinBufferSize(
+                rate, AudioFormat.CHANNEL_OUT_MONO, AudioFormat.ENCODING_PCM_16BIT));
+        return new AudioTrack(attributes, format, size, AudioTrack.MODE_STREAM, 0);
+    }
+
+    private static void run(int rate) throws Exception {
+        AudioRecord record = openDownlink(rate);
+        AudioTrack track = openUplink(rate);
         LocalServerSocket server = null;
         LocalSocket socket = null;
+        AtomicBoolean open = new AtomicBoolean(true);
+        Thread mixer = null;
         try {
-            record = (AudioRecord) extract.invoke(audio, format);
-            track = (AudioTrack) inject.invoke(audio, format);
-            int rate = record.getSampleRate();
-            if (rate <= 0 || track.getSampleRate() != rate) {
-                throw new IllegalStateException("audio endpoints report incompatible sample rates");
+            if (record.getState() != AudioRecord.STATE_INITIALIZED) {
+                throw new IllegalStateException("downlink capture did not initialize");
             }
-            // Twenty-millisecond frames give the stream socket an unambiguous
-            // unit. The endpoint-reported rate, not the requested one, sizes it;
-            // (rate / 50) * 2 is always a whole number of 16-bit mono samples,
-            // so no read ever splits a sample and shifts the rest to noise.
+            // (rate / 50) * 2 is a 20 ms frame, always a whole number of 16-bit
+            // mono samples, so no socket read ever splits a sample.
             int frameBytes = Math.max(2, (rate / 50) * 2);
             server = new LocalServerSocket(SOCKET_NAME);
             socket = server.accept();
-            // Announce the real rate and frame size before any audio, exactly as
-            // the screen stream announces the device before its packets: a stream
-            // socket keeps no write boundaries, so both ends must agree the frame
-            // size up front rather than tag each frame. One socket carries one
-            // direction each way, so no per-frame channel tag is needed at all.
+            // Announce the rate and frame size before any audio, as the screen
+            // stream announces the device: a stream socket keeps no write
+            // boundaries, so both ends must agree the frame size up front.
             writeHeader(socket.getOutputStream(), rate, frameBytes);
+            mixer = startMixer(open);
             record.startRecording();
             track.play();
-            bridge(socket, record, track, frameBytes);
+            bridge(socket, record, track, frameBytes, open);
         } finally {
-            // Releasing on every EOF/error matters: retained interception can
-            // deny the following call access to these exclusive endpoints.
+            open.set(false);
+            if (mixer != null) mixer.interrupt();
             if (socket != null) try { socket.close(); } catch (Exception ignored) {}
             if (server != null) try { server.close(); } catch (Exception ignored) {}
-            if (record != null) { try { record.stop(); } catch (Exception ignored) {} record.release(); }
-            if (track != null) { try { track.stop(); } catch (Exception ignored) {} track.release(); }
+            try { record.stop(); } catch (Exception ignored) {}
+            record.release();
+            try { track.stop(); } catch (Exception ignored) {}
+            track.release();
+            // Leaving the mixer routed would feed later media into the next call.
+            setMixers(false);
+        }
+    }
+
+    /** Keeps the in-call-music routes enabled for as long as the bridge runs. */
+    private static Thread startMixer(AtomicBoolean open) {
+        Thread thread = new Thread(() -> {
+            while (open.get()) {
+                setMixers(true);
+                try { Thread.sleep(1500); } catch (InterruptedException e) { return; }
+            }
+        }, "voice-mixer");
+        thread.setDaemon(true);
+        thread.start();
+        return thread;
+    }
+
+    private static void setMixers(boolean on) {
+        String value = on ? "1" : "0";
+        for (String control : MIXER_CONTROLS) {
+            try {
+                Process p = new ProcessBuilder("/system/bin/tinymix", control, value)
+                        .redirectErrorStream(true).start();
+                p.getInputStream().close();
+                p.waitFor();
+            } catch (Exception ignored) {
+                // A missing control on a different build is not fatal; the point
+                // is to open whichever of the candidates this device exposes.
+            }
         }
     }
 
@@ -130,18 +201,15 @@ public final class VoiceBridge {
     }
 
     private static void bridge(LocalSocket socket, AudioRecord record, AudioTrack track,
-                               int frameBytes) throws Exception {
+                               int frameBytes, AtomicBoolean open) throws Exception {
         InputStream input = socket.getInputStream();
         OutputStream output = socket.getOutputStream();
-        AtomicBoolean open = new AtomicBoolean(true);
         Throwable[] failure = new Throwable[2];
 
         Thread downlink = new Thread(() -> {
             byte[] pcm = new byte[frameBytes];
             try {
                 while (open.get()) {
-                    // Fill a whole frame before sending so the far end always
-                    // reads one aligned frame, never a torn one.
                     int offset = 0;
                     while (offset < frameBytes) {
                         int count = record.read(pcm, offset, frameBytes - offset);

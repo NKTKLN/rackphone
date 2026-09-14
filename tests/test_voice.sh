@@ -28,7 +28,7 @@ mkdir -p "$RACKPHONE_PROC_ROOT/proc/net"
 # remain ephemeral until action.sh owns their shutdown.
 cat > "$WORK/bin/app_process" <<EOF
 #!/bin/sh
-if [ "\${3:-}" = --probe ]; then echo interceptable=yes; exit 0; fi
+if [ "\${3:-}" = --probe ]; then echo ready=yes; exit 0; fi
 printf '0000: 00000002 0 00010000 1 1 0 @rackphone-voice\n' >> "$RACKPHONE_PROC_ROOT/proc/net/unix"
 exec sleep 300
 EOF
@@ -38,7 +38,7 @@ chmod +x "$WORK/bin/app_process"
 section "Idle status and idempotent stop"
 OUT=$(sh "$STATUS")
 assert_contains "idle is reported" "$OUT" "bridge=idle"
-assert_contains "HAL capability is reported" "$OUT" "interceptable=yes"
+assert_contains "audio path is reported ready" "$OUT" "audio=ready"
 if sh "$ACTION" stop >/dev/null 2>&1; then _ok "stop succeeds while idle"; else _bad "stop succeeds while idle" "non-zero"; fi
 
 section "Exclusive bridge"
@@ -61,6 +61,6 @@ if BAD=$(sh "$ACTION" start 2>&1); then
 else
   assert_contains "the missing dex is loud" "$BAD" "dex missing"
 fi
-assert_contains "missing dex cannot probe capability" "$(sh "$STATUS")" "interceptable=no"
+assert_contains "missing dex reports audio unavailable" "$(sh "$STATUS")" "audio=unavailable"
 
 summary
