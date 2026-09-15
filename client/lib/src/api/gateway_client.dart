@@ -6,6 +6,7 @@ import 'package:http/http.dart' as http;
 
 import 'errors.dart';
 import 'models.dart';
+import '../call/call_socket.dart';
 import '../screen/screen_socket.dart';
 
 typedef RefreshTokenProvider = Future<String?> Function();
@@ -72,9 +73,25 @@ extension GatewayScreenApi on GatewayApi {
   }
 }
 
+/// Call controls stay separate so existing lightweight gateway fakes do not
+/// acquire audio transport responsibilities they never exercise.
+abstract interface class GatewayCallsApi {
+  Future<CallActionResult> answerCall(String unit);
+  Future<CallActionResult> rejectCall(String unit);
+  Future<CallAudioSocket> callAudio(String unit);
+}
+
+extension GatewayCallAccess on GatewayApi {
+  GatewayCallsApi get callControl {
+    final gateway = this;
+    if (gateway is GatewayCallsApi) return gateway as GatewayCallsApi;
+    throw UnsupportedError('This gateway does not provide call control.');
+  }
+}
+
 /// The real gateway implementation, with only the access token kept in
 /// memory; durable refresh-token storage remains the device layer's decision.
-class GatewayClient implements GatewayApi, GatewayFilesApi {
+class GatewayClient implements GatewayApi, GatewayFilesApi, GatewayCallsApi {
   factory GatewayClient({
     required Uri baseUrl,
     http.Client? httpClient,
@@ -284,6 +301,40 @@ class GatewayClient implements GatewayApi, GatewayFilesApi {
     ).replace(scheme: httpScheme == 'http' ? 'ws' : 'wss');
     return ScreenSocket.connect(uri: uri, accessToken: _accessToken ?? '');
   }
+
+  @override
+  Future<CallActionResult> answerCall(String unit) =>
+      _callAction(unit, 'answer');
+
+  @override
+  Future<CallActionResult> rejectCall(String unit) =>
+      _callAction(unit, 'reject');
+
+  Future<CallActionResult> _callAction(String unit, String action) async {
+    final response = await _authenticated(
+      () => http.Request(
+        'POST',
+        _uri('/api/units/${Uri.encodeComponent(unit)}/call/$action'),
+      ),
+    );
+    return CallActionResult.fromJson(
+      _jsonObject(await response.stream.bytesToString()),
+    );
+  }
+
+  /// Builds the audio endpoint without exposing or duplicating URL rules.
+  Uri callAudioUri(String unit) {
+    final httpScheme = _baseUrl.scheme.toLowerCase();
+    return _uri(
+      '/api/units/${Uri.encodeComponent(unit)}/call/audio',
+    ).replace(scheme: httpScheme == 'http' ? 'ws' : 'wss');
+  }
+
+  @override
+  Future<CallAudioSocket> callAudio(String unit) => CallAudioSocket.connect(
+    uri: callAudioUri(unit),
+    accessToken: _accessToken ?? '',
+  );
 
   @override
   void close() {

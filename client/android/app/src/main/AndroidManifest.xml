@@ -11,6 +11,10 @@
     <!-- The CPU must stay awake long enough to receive and process SSE frames
          while the display is asleep. -->
     <uses-permission android:name="android.permission.WAKE_LOCK"/>
+    <!-- Requested only when accepting a call; no background recording occurs. -->
+    <uses-permission android:name="android.permission.RECORD_AUDIO"/>
+    <!-- Incoming calls may wake the dialer surface over the lock screen. -->
+    <uses-permission android:name="android.permission.USE_FULL_SCREEN_INTENT"/>
     <application
         android:label="Rackphone"
         android:name="${applicationName}"
@@ -21,6 +25,8 @@
             android:launchMode="singleTop"
             android:taskAffinity=""
             android:theme="@style/LaunchTheme"
+            android:showWhenLocked="true"
+            android:turnScreenOn="true"
             android:configChanges="orientation|keyboardHidden|keyboard|screenSize|smallestScreenSize|locale|layoutDirection|fontScale|screenLayout|density|uiMode"
             android:hardwareAccelerated="true"
             android:windowSoftInputMode="adjustResize">

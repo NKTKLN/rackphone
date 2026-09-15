@@ -1,6 +1,20 @@
 /// Tolerant, immutable representations of the gateway's public JSON.
 library;
 
+/// The gateway's acknowledgement of an incoming-call action.
+final class CallActionResult {
+  const CallActionResult({required this.status, required this.accepted});
+
+  factory CallActionResult.fromJson(Map<String, dynamic> json) =>
+      CallActionResult(
+        status: _string(json['status']),
+        accepted: json['accepted'] == true,
+      );
+
+  final String status;
+  final bool accepted;
+}
+
 /// Metadata for one regular file in a unit's confined transfer directory.
 class UnitFile {
   const UnitFile({

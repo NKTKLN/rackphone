@@ -3,9 +3,14 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_foreground_task/flutter_foreground_task.dart';
 
+import '../api/gateway_client.dart';
+import '../call/audio.dart';
+import '../call/call_controller.dart';
 import '../service/event_service.dart';
+import '../service/notifications.dart';
 import '../session/session_controller.dart';
 import 'home_page.dart';
+import 'pages/call_page.dart';
 import 'sign_in_page.dart';
 import 'theme.dart';
 
@@ -22,6 +27,10 @@ class RackphoneApp extends StatefulWidget {
 class _RackphoneAppState extends State<RackphoneApp> {
   SessionStatus _lastStatus = SessionStatus.unknown;
   String? _deliveryFailure;
+  CallController? _callController;
+  GatewayCallsApi? _callGateway;
+  final ArrivalNotifications _notifications = ArrivalNotifications();
+  Future<void>? _notificationsReady;
 
   @override
   void initState() {
@@ -30,15 +39,44 @@ class _RackphoneAppState extends State<RackphoneApp> {
     widget.sessionController.restore();
   }
 
+  Future<void> _initializeNotifications() async {
+    await _notifications.initialize(onCall: EventService.publishCallEvent);
+    final launchedCall = await _notifications.callThatLaunchedApp();
+    if (launchedCall != null) EventService.publishCallEvent(launchedCall);
+  }
+
   void _sessionChanged() {
     final status = widget.sessionController.state.status;
     if (status == _lastStatus) return;
     _lastStatus = status;
     if (status == SessionStatus.signedIn) {
+      _updateCallController();
       unawaited(_beginLiveDelivery());
     } else if (status == SessionStatus.signedOut) {
+      _disposeCallController();
       unawaited(_stopLiveDelivery());
     }
+  }
+
+  void _updateCallController() {
+    final gateway = widget.sessionController.gateway;
+    if (gateway is! GatewayCallsApi || identical(gateway, _callGateway)) return;
+    final callGateway = gateway as GatewayCallsApi;
+    _disposeCallController();
+    _callGateway = callGateway;
+    _callController = CallController(
+      gateway: callGateway,
+      events: EventService.callEvents,
+      initialEvent: EventService.latestCall,
+      audio: HardwareCallAudio(),
+    );
+    if (mounted) setState(() {});
+  }
+
+  void _disposeCallController() {
+    _callController?.dispose();
+    _callController = null;
+    _callGateway = null;
   }
 
   Future<void> _beginLiveDelivery() async {
@@ -48,6 +86,8 @@ class _RackphoneAppState extends State<RackphoneApp> {
       if (permission != NotificationPermission.granted) {
         await FlutterForegroundTask.requestNotificationPermission();
       }
+      await (_notificationsReady ??= _initializeNotifications());
+      await _notifications.requestFullScreenPermission();
       await EventService.start(widget.sessionController.tokenStore);
       if (mounted) setState(() => _deliveryFailure = null);
     } catch (failure) {
@@ -80,6 +120,7 @@ class _RackphoneAppState extends State<RackphoneApp> {
   @override
   void dispose() {
     widget.sessionController.removeListener(_sessionChanged);
+    _disposeCallController();
     super.dispose();
   }
 
@@ -112,6 +153,15 @@ class _RackphoneAppState extends State<RackphoneApp> {
     title: 'Rackphone',
     debugShowCheckedModeBanner: false,
     theme: rackphoneTheme(),
+    builder: (context, child) {
+      final callController = _callController;
+      return Stack(
+        children: <Widget>[
+          ?child,
+          if (callController != null) CallOverlay(controller: callController),
+        ],
+      );
+    },
     home: ListenableBuilder(
       listenable: widget.sessionController,
       builder: (context, _) {

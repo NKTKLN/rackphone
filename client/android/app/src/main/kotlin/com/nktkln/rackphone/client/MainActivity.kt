@@ -12,6 +12,7 @@ import java.nio.ByteOrder
 /** Hosts the low-overhead binary bridge between the screen stream and MediaCodec. */
 class MainActivity : FlutterActivity() {
     private var screenDecoder: ScreenDecoder? = null
+    private var callAudio: CallAudio? = null
     private val fileChooser = FileChooser(this)
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
@@ -28,6 +29,35 @@ class MainActivity : FlutterActivity() {
             reply.reply(message?.let { dispatch(decoder, it.order(ByteOrder.BIG_ENDIAN)) })
         }
 
+        val audioChannel = BasicMessageChannel(
+            flutterEngine.dartExecutor.binaryMessenger,
+            CALL_AUDIO_CHANNEL,
+            BinaryCodec.INSTANCE,
+        )
+        val audio = CallAudio(this, audioChannel)
+        callAudio = audio
+        audioChannel.setMessageHandler { message, reply ->
+            if (message == null || !message.hasRemaining()) {
+                reply.reply(null)
+            } else {
+                val ordered = message.order(ByteOrder.BIG_ENDIAN)
+                when (ordered.get().toInt()) {
+                    START_AUDIO -> audio.start(ordered.int, ordered.int, reply)
+                    PLAY_AUDIO -> {
+                        val packet = ByteArray(ordered.remaining())
+                        ordered.get(packet)
+                        audio.play(packet)
+                        reply.reply(null)
+                    }
+                    STOP_AUDIO -> {
+                        audio.dispose()
+                        reply.reply(null)
+                    }
+                    else -> reply.reply(null)
+                }
+            }
+        }
+
         // A method channel here, not a binary one: these calls are two a day and
         // carry a name beside the bytes, so the standard codec earns its keep.
         MethodChannel(
@@ -41,9 +71,20 @@ class MainActivity : FlutterActivity() {
         super.onActivityResult(requestCode, resultCode, data)
     }
 
+    override fun onRequestPermissionsResult(
+        requestCode: Int,
+        permissions: Array<out String>,
+        grantResults: IntArray,
+    ) {
+        if (callAudio?.onRequestPermissionsResult(requestCode, grantResults) == true) return
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+    }
+
     override fun cleanUpFlutterEngine(flutterEngine: FlutterEngine) {
         screenDecoder?.dispose()
         screenDecoder = null
+        callAudio?.close()
+        callAudio = null
         super.cleanUpFlutterEngine(flutterEngine)
     }
 
@@ -79,9 +120,13 @@ class MainActivity : FlutterActivity() {
     private companion object {
         const val CHANNEL = "com.nktkln.rackphone.client/screen"
         const val FILES_CHANNEL = "com.nktkln.rackphone.client/files"
+        const val CALL_AUDIO_CHANNEL = "com.nktkln.rackphone.client/call_audio"
         const val CREATE = 0
         const val FEED = 1
         const val RESET = 2
         const val DISPOSE = 3
+        const val START_AUDIO = 0
+        const val PLAY_AUDIO = 1
+        const val STOP_AUDIO = 2
     }
 }

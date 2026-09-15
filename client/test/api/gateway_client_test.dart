@@ -253,6 +253,48 @@ void main() {
     expect(telemetry.uptime, 12.5);
   });
 
+  test(
+    'call controls use authenticated unit routes and parse acceptance',
+    () async {
+      final paths = <String>[];
+      final fake = MockClient((request) async {
+        if (request.url.path == '/api/login') {
+          return http.Response(jsonEncode(_tokens), 200);
+        }
+        expect(request.method, 'POST');
+        expect(request.headers['authorization'], 'Bearer access-2');
+        paths.add(request.url.path);
+        final status = request.url.path.endsWith('/answer')
+            ? 'answered'
+            : 'rejected';
+        return http.Response(
+          jsonEncode({'status': status, 'accepted': true}),
+          200,
+        );
+      });
+      final client = GatewayClient(
+        baseUrl: Uri.parse('https://gateway.example/root/'),
+        httpClient: fake,
+      );
+      await _login(client);
+
+      final answered = await client.answerCall('lisa 01');
+      final rejected = await client.rejectCall('lisa 01');
+
+      expect(answered.status, 'answered');
+      expect(rejected.status, 'rejected');
+      expect(answered.accepted, isTrue);
+      expect(paths, <String>[
+        '/api/units/lisa%2001/call/answer',
+        '/api/units/lisa%2001/call/reject',
+      ]);
+      expect(
+        client.callAudioUri('lisa 01').toString(),
+        'wss://gateway.example/api/units/lisa%2001/call/audio',
+      );
+    },
+  );
+
   for (final status in [403, 404]) {
     test('telemetry HTTP $status remains a typed gateway failure', () async {
       final GatewayApi client = GatewayClient(
