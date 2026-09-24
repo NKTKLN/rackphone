@@ -73,11 +73,69 @@ extension GatewayScreenApi on GatewayApi {
   }
 }
 
+/// Sending stays separate so lightweight gateway fakes that only read do not
+/// have to pretend to send.
+abstract interface class GatewayMessagingApi {
+  /// Sends one SMS and returns it as the gateway stored it.
+  Future<GatewayEvent> sendMessage(String unit, String to, String body);
+}
+
+extension GatewayMessagingAccess on GatewayApi {
+  GatewayMessagingApi? get messaging {
+    final gateway = this;
+    return gateway is GatewayMessagingApi
+        ? gateway as GatewayMessagingApi
+        : null;
+  }
+}
+
+/// The address book stays separate for the same reason as sending.
+abstract interface class GatewayContactsApi {
+  /// A unit's contacts; [refresh] reads the unit rather than a recent copy.
+  Future<List<Contact>> contacts(String unit, {bool refresh = false});
+}
+
+extension GatewayContactsAccess on GatewayApi {
+  GatewayContactsApi? get addressBook {
+    final gateway = this;
+    return gateway is GatewayContactsApi ? gateway as GatewayContactsApi : null;
+  }
+}
+
+/// Administration needs the `admin` scope, which a device holds only when
+/// its operator asked for it at sign-in.
+abstract interface class GatewayAdminApi {
+  Future<List<Session>> sessions();
+  Future<void> revokeSession(int id);
+
+  /// Revokes every session, this device's included.
+  Future<void> revokeAllSessions();
+  Future<List<AuditEntry>> audit({int? limit});
+  Future<TotpEnrollment> enableTotp(String password);
+  Future<void> disableTotp(String password);
+}
+
+extension GatewayAdminAccess on GatewayApi {
+  GatewayAdminApi? get admin {
+    final gateway = this;
+    return gateway is GatewayAdminApi ? gateway as GatewayAdminApi : null;
+  }
+}
+
 /// Call controls stay separate so existing lightweight gateway fakes do not
 /// acquire audio transport responsibilities they never exercise.
 abstract interface class GatewayCallsApi {
   Future<CallActionResult> answerCall(String unit);
   Future<CallActionResult> rejectCall(String unit);
+
+  /// Places a call from [unit] to [to].
+  Future<CallActionResult> dial(String unit, String to);
+
+  /// Ends whatever call [unit] has, ringing, dialling or connected.
+  Future<CallActionResult> endCall(String unit);
+
+  /// Presses keypad keys on [unit]'s connected call.
+  Future<CallActionResult> sendDtmf(String unit, String digits);
   Future<CallAudioSocket> callAudio(String unit);
 }
 
@@ -91,7 +149,14 @@ extension GatewayCallAccess on GatewayApi {
 
 /// The real gateway implementation, with only the access token kept in
 /// memory; durable refresh-token storage remains the device layer's decision.
-class GatewayClient implements GatewayApi, GatewayFilesApi, GatewayCallsApi {
+class GatewayClient
+    implements
+        GatewayApi,
+        GatewayFilesApi,
+        GatewayCallsApi,
+        GatewayMessagingApi,
+        GatewayContactsApi,
+        GatewayAdminApi {
   factory GatewayClient({
     required Uri baseUrl,
     http.Client? httpClient,
@@ -310,13 +375,142 @@ class GatewayClient implements GatewayApi, GatewayFilesApi, GatewayCallsApi {
   Future<CallActionResult> rejectCall(String unit) =>
       _callAction(unit, 'reject');
 
-  Future<CallActionResult> _callAction(String unit, String action) async {
+  @override
+  Future<List<Session>> sessions() async {
+    final response = await _authenticated(
+      () => http.Request('GET', _uri('/api/sessions')),
+    );
+    return _objects(
+      _json(await response.stream.bytesToString()),
+    ).map(Session.fromJson).toList(growable: false);
+  }
+
+  @override
+  Future<void> revokeSession(int id) async {
+    final response = await _authenticated(
+      () => http.Request('DELETE', _uri('/api/sessions/$id')),
+    );
+    await response.stream.drain<void>();
+  }
+
+  @override
+  Future<void> revokeAllSessions() async {
+    final response = await _authenticated(
+      () => http.Request('POST', _uri('/api/sessions/revoke-all')),
+    );
+    await response.stream.drain<void>();
+  }
+
+  @override
+  Future<List<AuditEntry>> audit({int? limit}) async {
     final response = await _authenticated(
       () => http.Request(
-        'POST',
-        _uri('/api/units/${Uri.encodeComponent(unit)}/call/$action'),
+        'GET',
+        _uri('/api/audit', limit == null ? null : {'limit': '$limit'}),
       ),
     );
+    return _objects(
+      _json(await response.stream.bytesToString()),
+    ).map(AuditEntry.fromJson).toList(growable: false);
+  }
+
+  @override
+  Future<TotpEnrollment> enableTotp(String password) async {
+    final response = await _authenticated(
+      () => _jsonRequest('POST', '/api/totp', {'password': password}),
+    );
+    return TotpEnrollment.fromJson(
+      _jsonObject(await response.stream.bytesToString()),
+    );
+  }
+
+  @override
+  Future<void> disableTotp(String password) async {
+    final response = await _authenticated(
+      () => _jsonRequest('DELETE', '/api/totp', {'password': password}),
+    );
+    await response.stream.drain<void>();
+  }
+
+  http.Request _jsonRequest(
+    String method,
+    String path,
+    Map<String, String> body,
+  ) => http.Request(method, _uri(path))
+    ..headers['Content-Type'] = 'application/json'
+    ..body = jsonEncode(body);
+
+  static Iterable<Map<String, dynamic>> _objects(dynamic decoded) {
+    if (decoded is! List) {
+      throw const GatewayProtocolException('expected a list');
+    }
+    return decoded.whereType<Map<String, dynamic>>();
+  }
+
+  @override
+  Future<List<Contact>> contacts(String unit, {bool refresh = false}) async {
+    final response = await _authenticated(
+      () => http.Request(
+        'GET',
+        _uri(
+          '/api/units/${Uri.encodeComponent(unit)}/contacts',
+          refresh ? const {'refresh': 'true'} : null,
+        ),
+      ),
+    );
+    final decoded = _json(await response.stream.bytesToString());
+    if (decoded is! List) {
+      throw const GatewayProtocolException('contacts were not a list');
+    }
+    return decoded
+        .whereType<Map<String, dynamic>>()
+        .map(Contact.fromJson)
+        .toList(growable: false);
+  }
+
+  @override
+  Future<GatewayEvent> sendMessage(String unit, String to, String body) async {
+    final response = await _authenticated(
+      () => http.Request('POST', _uri('/api/messages'))
+        ..headers['Content-Type'] = 'application/json'
+        ..body = jsonEncode(<String, String>{
+          'unit': unit,
+          'to': to,
+          'body': body,
+        }),
+    );
+    final answer = _jsonObject(await response.stream.bytesToString());
+    return GatewayEvent.fromJson(_asObject(answer['event']));
+  }
+
+  @override
+  Future<CallActionResult> dial(String unit, String to) =>
+      _callAction(unit, 'dial', {'to': to});
+
+  @override
+  Future<CallActionResult> endCall(String unit) => _callAction(unit, 'end');
+
+  @override
+  Future<CallActionResult> sendDtmf(String unit, String digits) =>
+      _callAction(unit, 'dtmf', {'digits': digits});
+
+  Future<CallActionResult> _callAction(
+    String unit,
+    String action, [
+    Map<String, String>? body,
+  ]) async {
+    final response = await _authenticated(() {
+      final request = http.Request(
+        'POST',
+        _uri('/api/units/${Uri.encodeComponent(unit)}/call/$action'),
+      );
+      if (body != null) {
+        request
+          ..headers['Content-Type'] = 'application/json'
+          ..body = jsonEncode(body);
+      }
+      return request;
+    });
     return CallActionResult.fromJson(
       _jsonObject(await response.stream.bytesToString()),
     );

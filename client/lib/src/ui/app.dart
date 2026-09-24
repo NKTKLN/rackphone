@@ -9,8 +9,8 @@ import '../call/call_controller.dart';
 import '../service/event_service.dart';
 import '../service/notifications.dart';
 import '../session/session_controller.dart';
-import 'home_page.dart';
 import 'pages/call_page.dart';
+import 'shell.dart';
 import 'sign_in_page.dart';
 import 'theme.dart';
 
@@ -179,7 +179,13 @@ class _RackphoneAppState extends State<RackphoneApp> {
             busy: true,
           ),
           SessionStatus.signedIn => _withDeliveryBanner(
-            HomePage(controller: widget.sessionController),
+            AppShell(
+              session: widget.sessionController,
+              onCall: _callController == null
+                  ? null
+                  : (unit, address) =>
+                        unawaited(_callController?.dial(unit, address)),
+            ),
           ),
           SessionStatus.offline => _OfflinePage(
             controller: widget.sessionController,

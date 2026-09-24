@@ -37,7 +37,7 @@ final class CallAudioSocket {
     // before any header - still leaves `ready` to error. Swallow it here so it
     // is never an unhandled async error; a real awaiter of `ready` still gets
     // the error through its own subscription.
-    unawaited(_ready.future.then((_) {}, onError: (Object _, StackTrace __) {}));
+    unawaited(_ready.future.then((_) {}, onError: (Object _, StackTrace _) {}));
     _socket.listen(
       _route,
       onError: _onError,

@@ -67,6 +67,9 @@ final class CallController extends ChangeNotifier {
   String? _caller;
   String? _message;
   DateTime? _startedAt;
+  bool _outgoing = false;
+  int? _placedAt;
+  String _keys = '';
   bool _muted = false;
   bool _ending = false;
   bool _disposed = false;
@@ -78,6 +81,12 @@ final class CallController extends ChangeNotifier {
   DateTime? get startedAt => _startedAt;
   bool get muted => _muted;
 
+  /// Whether the unit placed this call rather than answered it.
+  bool get outgoing => _outgoing;
+
+  /// The keys pressed during this call, as a keypad shows them.
+  String get keys => _keys;
+
   void _onEvent(GatewayEvent event) {
     if (event.kind != 'call') return;
     if (event.direction == 'ringing') {
@@ -86,14 +95,66 @@ final class CallController extends ChangeNotifier {
       _caller = event.address?.isEmpty == true ? null : event.address;
       _message = null;
       _muted = false;
+      _outgoing = false;
+      _placedAt = null;
+      _keys = '';
       _startedAt = null;
       _setState(CallState.ringing);
       return;
     }
     if (_unit != event.unit || _state == CallState.idle) return;
+    // A placed call is logged when it ends, under the number as the unit
+    // dialled it - which need not be spelled as it was typed here. A record
+    // stamped before this dial is the previous call's, arriving late.
+    if (_outgoing) {
+      if (event.direction == 'out' && !_predatesDial(event)) unawaited(_end());
+      return;
+    }
     final address = event.address;
     if (address != null && address.isNotEmpty && _caller != address) return;
     unawaited(_end());
+  }
+
+  bool _predatesDial(GatewayEvent event) {
+    final placedAt = _placedAt;
+    final at = event.timestamp;
+    return placedAt != null && at != null && at < placedAt;
+  }
+
+  /// Places a call from [unit] and bridges its audio once the unit dials.
+  Future<void> dial(String unit, String to) async {
+    if (_state != CallState.idle && _state != CallState.ended) return;
+    _unit = unit;
+    _caller = to;
+    _message = null;
+    _muted = false;
+    _outgoing = true;
+    _placedAt = null;
+    _keys = '';
+    _startedAt = null;
+    _setState(CallState.connecting);
+    try {
+      _placedAt = (await gateway.dial(unit, to)).placedAt;
+      await _bridge(unit);
+    } catch (failure, stackTrace) {
+      _fail(failure, stackTrace);
+      await _closeAudio();
+    }
+  }
+
+  /// Presses keypad keys on the connected call, for a menu that asks for them.
+  Future<void> press(String digits) async {
+    final unit = _unit;
+    if (_state != CallState.inCall || unit == null) return;
+    _keys += digits;
+    notifyListeners();
+    try {
+      await gateway.sendDtmf(unit, digits);
+    } catch (failure) {
+      // A lost key press is worth saying, not worth ending the call over.
+      _message = 'Keys were not sent: $failure';
+      notifyListeners();
+    }
   }
 
   Future<void> accept() async {
@@ -102,36 +163,41 @@ final class CallController extends ChangeNotifier {
     _setState(CallState.connecting);
     try {
       await gateway.answerCall(unit);
-      if (_state != CallState.connecting || _ending || _disposed) return;
-      final connection = await socketFactory(unit);
-      if (_state != CallState.connecting || _ending || _disposed) {
-        await connection.close();
-        return;
-      }
-      _connection = connection;
-      unawaited(connection.closed.then(_onClosed, onError: _fail));
-      final format = await connection.ready;
-      if (_state != CallState.connecting || _ending || _disposed) return;
-      await audio.start(format);
-      if (_state != CallState.connecting || _ending || _disposed) {
-        await audio.dispose();
-        return;
-      }
-      _downlinkSubscription = connection.downlink.listen(
-        (frame) => unawaited(audio.play(frame)),
-        onError: _fail,
-      );
-      _uplinkSubscription = audio.uplink.listen((frame) {
-        if (!_muted && _state == CallState.inCall) {
-          connection.sendUplink(frame);
-        }
-      }, onError: _fail);
-      _startedAt = DateTime.now();
-      _setState(CallState.inCall);
+      await _bridge(unit);
     } catch (failure, stackTrace) {
       _fail(failure, stackTrace);
       await _closeAudio();
     }
+  }
+
+  /// Connects the unit's call audio to this device's microphone and speaker.
+  Future<void> _bridge(String unit) async {
+    if (_state != CallState.connecting || _ending || _disposed) return;
+    final connection = await socketFactory(unit);
+    if (_state != CallState.connecting || _ending || _disposed) {
+      await connection.close();
+      return;
+    }
+    _connection = connection;
+    unawaited(connection.closed.then(_onClosed, onError: _fail));
+    final format = await connection.ready;
+    if (_state != CallState.connecting || _ending || _disposed) return;
+    await audio.start(format);
+    if (_state != CallState.connecting || _ending || _disposed) {
+      await audio.dispose();
+      return;
+    }
+    _downlinkSubscription = connection.downlink.listen(
+      (frame) => unawaited(audio.play(frame)),
+      onError: _fail,
+    );
+    _uplinkSubscription = audio.uplink.listen((frame) {
+      if (!_muted && _state == CallState.inCall) {
+        connection.sendUplink(frame);
+      }
+    }, onError: _fail);
+    _startedAt = DateTime.now();
+    _setState(CallState.inCall);
   }
 
   Future<void> reject() async {
@@ -145,7 +211,22 @@ final class CallController extends ChangeNotifier {
     }
   }
 
-  Future<void> hangup() => _end();
+  /// Ends the call on the unit as well as here.
+  ///
+  /// The unit is asked first and its failure ignored: a call already gone on
+  /// the unit is the outcome wanted, and the local end must happen regardless.
+  Future<void> hangup() async {
+    final unit = _unit;
+    if (unit != null &&
+        (_state == CallState.connecting || _state == CallState.inCall)) {
+      try {
+        await gateway.endCall(unit);
+      } catch (_) {
+        // See above: the local end below is what the operator asked for.
+      }
+    }
+    await _end();
+  }
 
   void toggleMute() {
     if (_state != CallState.inCall) return;
@@ -179,6 +260,7 @@ final class CallController extends ChangeNotifier {
     await _closeAudio();
     _startedAt = null;
     _muted = false;
+    _keys = '';
     _ending = false;
     if (!_disposed) _setState(CallState.ended);
   }

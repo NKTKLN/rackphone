@@ -29,6 +29,26 @@ void main() {
     expect(gateway.loginCalls, 0);
   });
 
+  testWidgets('admin access is asked for only when switched on', (
+    tester,
+  ) async {
+    final gateway = _FakeGateway(
+      loginFailures: [const GatewayAuthException('invalid credentials')],
+    );
+    await tester.pumpWidget(_app(gateway));
+    await tester.pumpAndSettle();
+    await _completeRequiredFields(tester);
+
+    await tester.tap(find.text('Sign in'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Admin access'));
+    await tester.pump();
+    await tester.tap(find.text('Sign in'));
+    await tester.pumpAndSettle();
+
+    expect(gateway.scopes, ['control', 'admin']);
+  });
+
   testWidgets('wrong password explains the refusal', (tester) async {
     final gateway = _FakeGateway(
       loginFailures: [const GatewayAuthException('invalid credentials')],
@@ -146,6 +166,7 @@ final class _FakeGateway implements GatewayApi {
   final GatewayException? refreshFailure;
   int loginCalls = 0;
   int refreshCalls = 0;
+  final List<String> scopes = [];
 
   @override
   Future<Tokens> logIn({
@@ -157,6 +178,7 @@ final class _FakeGateway implements GatewayApi {
     String scope = 'control',
   }) async {
     final call = loginCalls++;
+    scopes.add(scope);
     if (call < loginFailures.length) throw loginFailures[call];
     return _tokens;
   }

@@ -75,6 +75,7 @@ class _ActiveCall extends StatefulWidget {
 
 class _ActiveCallState extends State<_ActiveCall> {
   Timer? _timer;
+  bool _keypad = false;
 
   @override
   void initState() {
@@ -99,32 +100,71 @@ class _ActiveCallState extends State<_ActiveCall> {
         : DateTime.now().difference(startedAt);
     final minutes = elapsed.inMinutes.toString().padLeft(2, '0');
     final seconds = (elapsed.inSeconds % 60).toString().padLeft(2, '0');
+    final connected = controller.state == CallState.inCall;
+    final theme = Theme.of(context);
     return _CallSurface(
       children: <Widget>[
-        const Icon(Icons.account_circle, size: 104),
-        const SizedBox(height: 24),
+        if (!_keypad) ...<Widget>[
+          const Icon(Icons.account_circle, size: 104),
+          const SizedBox(height: 24),
+        ],
         Text(
           controller.caller ?? 'Unknown',
           textAlign: TextAlign.center,
-          style: Theme.of(context).textTheme.headlineMedium,
+          style: theme.textTheme.headlineMedium,
         ),
-        const SizedBox(height: 12),
+        const SizedBox(height: 8),
         Text(
           controller.state == CallState.connecting
-              ? 'Connecting…'
+              ? (controller.outgoing ? 'Calling…' : 'Connecting…')
               : '$minutes:$seconds',
-          style: Theme.of(context).textTheme.titleLarge,
+          style: theme.textTheme.titleLarge,
         ),
+        if (controller.unit != null)
+          Text(
+            'via ${controller.unit}',
+            style: theme.textTheme.bodyMedium?.copyWith(
+              color: theme.colorScheme.onSurfaceVariant,
+            ),
+          ),
+        if (controller.message?.isNotEmpty == true)
+          Padding(
+            padding: const EdgeInsets.only(top: 8),
+            child: Text(
+              controller.message!,
+              textAlign: TextAlign.center,
+              style: TextStyle(color: theme.colorScheme.error),
+            ),
+          ),
         const Spacer(),
+        if (_keypad) ...<Widget>[
+          Text(
+            controller.keys,
+            style: theme.textTheme.headlineSmall,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+          ),
+          const SizedBox(height: 8),
+          Keypad(onKey: (key) => unawaited(controller.press(key))),
+          const SizedBox(height: 16),
+        ],
         Row(
           mainAxisAlignment: MainAxisAlignment.spaceEvenly,
           children: <Widget>[
             _RoundCallButton(
               label: controller.muted ? 'Unmute' : 'Mute',
               icon: controller.muted ? Icons.mic_off : Icons.mic,
-              color: Theme.of(context).colorScheme.secondaryContainer,
-              onPressed: controller.state == CallState.inCall
-                  ? controller.toggleMute
+              color: theme.colorScheme.secondaryContainer,
+              onPressed: connected ? controller.toggleMute : null,
+            ),
+            _RoundCallButton(
+              label: 'Keypad',
+              icon: _keypad ? Icons.dialpad : Icons.dialpad_outlined,
+              color: _keypad
+                  ? theme.colorScheme.primaryContainer
+                  : theme.colorScheme.secondaryContainer,
+              onPressed: connected
+                  ? () => setState(() => _keypad = !_keypad)
                   : null,
             ),
             _RoundCallButton(
@@ -214,4 +254,68 @@ class _RoundCallButton extends StatelessWidget {
       Text(label),
     ],
   );
+}
+
+/// The twelve keys of a phone, each with its letters, as every dialler has.
+class Keypad extends StatelessWidget {
+  const Keypad({required this.onKey, this.onPlus, super.key});
+
+  final ValueChanged<String> onKey;
+
+  /// A long press on 0, which is how a phone types `+`; null disables it.
+  final VoidCallback? onPlus;
+
+  static const _keys = <(String, String)>[
+    ('1', ''),
+    ('2', 'ABC'),
+    ('3', 'DEF'),
+    ('4', 'GHI'),
+    ('5', 'JKL'),
+    ('6', 'MNO'),
+    ('7', 'PQRS'),
+    ('8', 'TUV'),
+    ('9', 'WXYZ'),
+    ('*', ''),
+    ('0', '+'),
+    ('#', ''),
+  ];
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    // A thumb's width of keys, however wide the screen.
+    return ConstrainedBox(
+      constraints: const BoxConstraints(maxWidth: 320),
+      child: _grid(theme),
+    );
+  }
+
+  Widget _grid(ThemeData theme) {
+    return GridView.count(
+      crossAxisCount: 3,
+      shrinkWrap: true,
+      physics: const NeverScrollableScrollPhysics(),
+      childAspectRatio: 1.6,
+      children: <Widget>[
+        for (final (digit, letters) in _keys)
+          InkWell(
+            customBorder: const StadiumBorder(),
+            onTap: () => onKey(digit),
+            onLongPress: digit == '0' ? onPlus : null,
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: <Widget>[
+                Text(digit, style: theme.textTheme.headlineMedium),
+                Text(
+                  letters,
+                  style: theme.textTheme.labelSmall?.copyWith(
+                    color: theme.colorScheme.onSurfaceVariant,
+                  ),
+                ),
+              ],
+            ),
+          ),
+      ],
+    );
+  }
 }

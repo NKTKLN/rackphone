@@ -70,14 +70,14 @@ void main() {
 }
 
 List<int> _videoStream() {
-  final bytes = Uint8List(77 + 12 + 2);
-  bytes.setRange(1, 6, 'phone'.codeUnits);
-  bytes.setRange(65, 69, 'h264'.codeUnits);
+  final bytes = Uint8List(76 + 12 + 2);
+  bytes.setRange(0, 5, 'phone'.codeUnits);
+  bytes.setRange(64, 68, 'h264'.codeUnits);
   final data = ByteData.sublistView(bytes);
-  data.setUint32(69, 720, Endian.big);
-  data.setUint32(73, 1280, Endian.big);
-  data.setUint64(77, 4, Endian.big);
-  data.setUint32(85, 2, Endian.big);
-  bytes.setRange(89, 91, <int>[5, 6]);
+  data.setUint32(68, 720, Endian.big);
+  data.setUint32(72, 1280, Endian.big);
+  data.setUint64(76, 4, Endian.big);
+  data.setUint32(84, 2, Endian.big);
+  bytes.setRange(88, 90, <int>[5, 6]);
   return bytes;
 }

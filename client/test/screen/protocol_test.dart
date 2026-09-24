@@ -123,12 +123,12 @@ void main() {
 }
 
 List<int> _introduction(String name, String codec, int width, int height) {
-  final bytes = Uint8List(77);
-  bytes.setRange(1, 1 + name.length, name.codeUnits);
-  bytes.setRange(65, 69, codec.codeUnits);
+  final bytes = Uint8List(76);
+  bytes.setRange(0, name.length, name.codeUnits);
+  bytes.setRange(64, 68, codec.codeUnits);
   final data = ByteData.sublistView(bytes);
-  data.setUint32(69, width, Endian.big);
-  data.setUint32(73, height, Endian.big);
+  data.setUint32(68, width, Endian.big);
+  data.setUint32(72, height, Endian.big);
   return bytes;
 }
 

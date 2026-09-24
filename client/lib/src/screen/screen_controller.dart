@@ -152,6 +152,33 @@ final class ScreenController extends ChangeNotifier {
     }
   }
 
+  /// Presses and releases one Android key, such as back or home.
+  void pressKey(int keycode) {
+    for (final action in const <int>[0, 1]) {
+      _send(
+        encodeKeyEvent(
+          action: action,
+          keycode: keycode,
+          repeat: 0,
+          metaState: 0,
+        ),
+      );
+    }
+  }
+
+  /// Turns the device a quarter, as scrcpy's own rotate shortcut does.
+  void rotate() => _send(encodeRotateDevice());
+
+  void _send(List<int> message) {
+    final connection = _connection;
+    if (connection == null || _state != ScreenState.live) return;
+    try {
+      connection.send(message);
+    } catch (failure) {
+      _fail(failure);
+    }
+  }
+
   Future<void> disconnect() async {
     if (_disconnecting) return;
     _disconnecting = true;

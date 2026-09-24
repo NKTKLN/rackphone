@@ -136,7 +136,9 @@ final class _EventTaskHandler extends TaskHandler {
             });
           }
           final settings = await ServiceSettings.read();
-          if (settings.shouldNotify(event.kind, DateTime.now())) {
+          // A message this gateway sent is news to nobody.
+          if (event.direction != 'out' &&
+              settings.shouldNotify(event.kind, DateTime.now())) {
             await notifications.show(event);
           }
         }

@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 
-/// Keeps the chrome quiet so live rack state remains the focus.
+/// One dark Material 3 scheme from the app's seed, and nothing louder.
 ThemeData rackphoneTheme() {
   final scheme = ColorScheme.fromSeed(
     seedColor: const Color(0xFF7C6BA8),
@@ -12,10 +12,22 @@ ThemeData rackphoneTheme() {
     scaffoldBackgroundColor: scheme.surface,
     appBarTheme: AppBarTheme(
       backgroundColor: scheme.surface,
-      surfaceTintColor: scheme.surfaceTint.withValues(alpha: 0.10),
+      surfaceTintColor: Colors.transparent,
+      scrolledUnderElevation: 0,
+    ),
+    drawerTheme: DrawerThemeData(
+      backgroundColor: scheme.surfaceContainerLow,
+      width: 300,
     ),
     cardTheme: CardThemeData(
-      surfaceTintColor: scheme.surfaceTint.withValues(alpha: 0.08),
+      color: scheme.surfaceContainer,
+      elevation: 0,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
     ),
+    floatingActionButtonTheme: FloatingActionButtonThemeData(
+      backgroundColor: scheme.primaryContainer,
+      foregroundColor: scheme.onPrimaryContainer,
+    ),
+    dividerTheme: DividerThemeData(color: scheme.outlineVariant, space: 1),
   );
 }

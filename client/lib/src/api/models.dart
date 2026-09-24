@@ -1,18 +1,28 @@
 /// Tolerant, immutable representations of the gateway's public JSON.
 library;
 
+import 'dart:convert';
+
 /// The gateway's acknowledgement of an incoming-call action.
 final class CallActionResult {
-  const CallActionResult({required this.status, required this.accepted});
+  const CallActionResult({
+    required this.status,
+    required this.accepted,
+    this.placedAt,
+  });
 
   factory CallActionResult.fromJson(Map<String, dynamic> json) =>
       CallActionResult(
         status: _string(json['status']),
         accepted: json['accepted'] == true,
+        placedAt: _int(json['placed_at']),
       );
 
   final String status;
   final bool accepted;
+
+  /// When a dial was placed, on the unit's clock in milliseconds.
+  final int? placedAt;
 }
 
 /// Metadata for one regular file in a unit's confined transfer directory.
@@ -146,19 +156,28 @@ class GatewayEvent {
     required this.direction,
     required this.duration,
     required this.receivedAt,
+    this.app,
+    this.title,
   });
 
-  factory GatewayEvent.fromJson(Map<String, dynamic> json) => GatewayEvent(
-    id: _int(json['id']) ?? 0,
-    unit: _string(json['unit']),
-    kind: _string(json['kind']),
-    address: _nullableString(json['address']),
-    body: _nullableString(json['body']),
-    timestamp: _int(json['ts']),
-    direction: _nullableString(json['direction']),
-    duration: _int(json['duration']),
-    receivedAt: _int(json['received_at']),
-  );
+  factory GatewayEvent.fromJson(Map<String, dynamic> json) {
+    // What the device reported beyond the stored columns rides along in
+    // `raw_json`; a notification's app label and title live only there.
+    final raw = _rawJson(json['raw_json']);
+    return GatewayEvent(
+      id: _int(json['id']) ?? 0,
+      unit: _string(json['unit']),
+      kind: _string(json['kind']),
+      address: _nullableString(json['address']),
+      body: _nullableString(json['body']),
+      timestamp: _int(json['ts']),
+      direction: _nullableString(json['direction']),
+      duration: _int(json['duration']),
+      receivedAt: _int(json['received_at']),
+      app: _nullableString(json['app'] ?? raw['app']),
+      title: _nullableString(json['title'] ?? raw['title']),
+    );
+  }
 
   final int id;
   final String unit;
@@ -174,6 +193,18 @@ class GatewayEvent {
   final int? duration;
   final int? receivedAt;
 
+  /// A notification's app label and title; null for anything else.
+  final String? app;
+  final String? title;
+
+  /// When it happened: the device's [timestamp] is in milliseconds, the
+  /// host's [receivedAt] in seconds and only a fallback.
+  DateTime? get occurredAt {
+    final received = receivedAt;
+    final millis = timestamp ?? (received == null ? null : received * 1000);
+    return millis == null ? null : DateTime.fromMillisecondsSinceEpoch(millis);
+  }
+
   @override
   bool operator ==(Object other) =>
       other is GatewayEvent &&
@@ -185,7 +216,9 @@ class GatewayEvent {
       timestamp == other.timestamp &&
       direction == other.direction &&
       duration == other.duration &&
-      receivedAt == other.receivedAt;
+      receivedAt == other.receivedAt &&
+      app == other.app &&
+      title == other.title;
 
   @override
   int get hashCode => Object.hash(
@@ -198,7 +231,39 @@ class GatewayEvent {
     direction,
     duration,
     receivedAt,
+    app,
+    title,
   );
+}
+
+/// One number from a unit's address book.
+class Contact {
+  const Contact({required this.name, required this.number, this.normalized});
+
+  factory Contact.fromJson(Map<String, dynamic> json) => Contact(
+    name: _string(json['name']),
+    number: _string(json['number']),
+    normalized: _nullableString(json['normalized']),
+  );
+
+  final String name;
+  final String number;
+
+  /// E.164 when the unit knows it; what a conversation is best keyed by.
+  final String? normalized;
+
+  /// The address to text or call: the normalised form, else the digits.
+  String get address => normalized ?? number.replaceAll(RegExp(r'[^0-9+]'), '');
+
+  @override
+  bool operator ==(Object other) =>
+      other is Contact &&
+      name == other.name &&
+      number == other.number &&
+      normalized == other.normalized;
+
+  @override
+  int get hashCode => Object.hash(name, number, normalized);
 }
 
 /// A current, finite subset of one unit's exported Prometheus samples.
@@ -390,6 +455,51 @@ class GatewayHealth {
   int get hashCode => Object.hash(status, version, ntfyEnabled, totpEnabled);
 }
 
+/// One row of the gateway's permanent action log.
+class AuditEntry {
+  const AuditEntry({
+    required this.id,
+    required this.at,
+    required this.actor,
+    required this.action,
+    required this.subject,
+    required this.detail,
+  });
+
+  factory AuditEntry.fromJson(Map<String, dynamic> json) => AuditEntry(
+    id: _int(json['id']) ?? 0,
+    at: _int(json['at']) ?? 0,
+    actor: _nullableString(json['actor']),
+    action: _string(json['action']),
+    subject: _nullableString(json['subject']),
+    detail: _nullableString(json['detail']),
+  );
+
+  final int id;
+
+  /// Unix seconds.
+  final int at;
+  final String? actor;
+  final String action;
+  final String? subject;
+  final String? detail;
+}
+
+/// What enabling two-factor sign-in hands back, once.
+class TotpEnrollment {
+  const TotpEnrollment({required this.secret, required this.recoveryCodes});
+
+  factory TotpEnrollment.fromJson(Map<String, dynamic> json) => TotpEnrollment(
+    secret: _string(json['secret']),
+    recoveryCodes: List.unmodifiable(
+      (json['recovery_codes'] as List? ?? const []).whereType<String>(),
+    ),
+  );
+
+  final String secret;
+  final List<String> recoveryCodes;
+}
+
 /// Refresh-token metadata deliberately excludes the token and its stored hash.
 class Session {
   const Session({
@@ -448,6 +558,16 @@ int? _int(dynamic value) => value is num ? value.toInt() : null;
 String _string(dynamic value) => value is String ? value : '';
 
 String? _nullableString(dynamic value) => value is String ? value : null;
+
+/// The device's original record, which the gateway stores as a JSON string.
+Map<String, dynamic> _rawJson(dynamic value) {
+  if (value is! String || value.isEmpty) return const {};
+  try {
+    return _map(jsonDecode(value));
+  } on FormatException {
+    return const {};
+  }
+}
 
 Map<String, dynamic> _map(dynamic value) => value is Map
     ? value.map((key, value) => MapEntry(key.toString(), value))

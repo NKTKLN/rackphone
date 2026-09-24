@@ -72,20 +72,23 @@ final class VideoStreamParser {
   void _parse() {
     while (true) {
       if (!_hasDeviceInfo) {
-        const introductionLength = 1 + 64 + 4 + 4 + 4;
+        // Device name, codec, width and height. The server connects back
+        // through an adb reverse, so there is no leading dummy byte: scrcpy
+        // sends one only to a host that connected to it.
+        const introductionLength = 64 + 4 + 4 + 4;
         if (_buffer.length < introductionLength) return;
         final introduction = _take(introductionLength);
-        final nameBytes = introduction.sublist(1, 65);
+        final nameBytes = introduction.sublist(0, 64);
         final zero = nameBytes.indexOf(0);
-        final codecBytes = introduction.sublist(65, 69);
+        final codecBytes = introduction.sublist(64, 68);
         _device.add(
           DeviceInfo(
             name: utf8.decode(
               zero < 0 ? nameBytes : nameBytes.sublist(0, zero),
             ),
             codec: ascii.decode(codecBytes.where((byte) => byte != 0).toList()),
-            width: _uint32(introduction, 69),
-            height: _uint32(introduction, 73),
+            width: _uint32(introduction, 68),
+            height: _uint32(introduction, 72),
           ),
         );
         _hasDeviceInfo = true;
@@ -174,6 +177,16 @@ List<int> encodeKeyEvent({
   data.setUint32(6, repeat, Endian.big);
   data.setUint32(10, metaState, Endian.big);
   return bytes;
+}
+
+/// Encodes scrcpy's rotate-device request, a type byte and nothing else.
+List<int> encodeRotateDevice() => const <int>[11];
+
+/// Android keycodes for the navigation keys under the mirrored screen.
+abstract final class AndroidKey {
+  static const int home = 3;
+  static const int back = 4;
+  static const int appSwitch = 187;
 }
 
 int _uint32(List<int> bytes, int offset) => ByteData.sublistView(

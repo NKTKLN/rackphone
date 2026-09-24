@@ -29,6 +29,7 @@ class _SignInPageState extends State<SignInPage> {
   final _totp = TextEditingController();
   late final TextEditingController _deviceLabel;
   bool _totpRequested = false;
+  bool _admin = false;
 
   @override
   void initState() {
@@ -89,6 +90,7 @@ class _SignInPageState extends State<SignInPage> {
       password: _password.text,
       deviceLabel: _deviceLabel.text.trim(),
       totpCode: _totpRequested ? _totp.text.trim() : null,
+      scope: _admin ? 'admin' : 'control',
     );
   }
 
@@ -185,6 +187,19 @@ class _SignInPageState extends State<SignInPage> {
                       enabled: !widget.busy,
                       decoration: const InputDecoration(
                         labelText: 'Device label',
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+                    SwitchListTile(
+                      contentPadding: EdgeInsets.zero,
+                      value: _admin,
+                      onChanged: widget.busy
+                          ? null
+                          : (value) => setState(() => _admin = value),
+                      title: const Text('Admin access'),
+                      subtitle: const Text(
+                        'Lets this phone manage sessions and two-factor '
+                        'sign-in. Leave off unless you need that here.',
                       ),
                     ),
                     if (failureMessage != null) ...<Widget>[

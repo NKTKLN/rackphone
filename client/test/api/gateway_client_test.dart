@@ -280,6 +280,7 @@ void main() {
 
       final answered = await client.answerCall('lisa 01');
       final rejected = await client.rejectCall('lisa 01');
+      await client.endCall('lisa 01');
 
       expect(answered.status, 'answered');
       expect(rejected.status, 'rejected');
@@ -287,6 +288,7 @@ void main() {
       expect(paths, <String>[
         '/api/units/lisa%2001/call/answer',
         '/api/units/lisa%2001/call/reject',
+        '/api/units/lisa%2001/call/end',
       ]);
       expect(
         client.callAudioUri('lisa 01').toString(),
@@ -294,6 +296,154 @@ void main() {
       );
     },
   );
+
+  test('contacts read the unit route, and refresh only when asked', () async {
+    final urls = <Uri>[];
+    final fake = MockClient((request) async {
+      if (request.url.path == '/api/login') {
+        return http.Response(jsonEncode(_tokens), 200);
+      }
+      urls.add(request.url);
+      return http.Response(
+        jsonEncode([
+          {'name': 'Andrew', 'number': '+7 900', 'normalized': '+7900'},
+        ]),
+        200,
+      );
+    });
+    final client = GatewayClient(
+      baseUrl: Uri.parse('https://gateway.example'),
+      httpClient: fake,
+    );
+    await _login(client);
+
+    final contacts = await client.contacts('lisa01');
+    await client.contacts('lisa01', refresh: true);
+
+    expect(contacts.single.name, 'Andrew');
+    expect(contacts.single.address, '+7900');
+    expect(urls.first.path, '/api/units/lisa01/contacts');
+    expect(urls.first.hasQuery, isFalse);
+    expect(urls.last.queryParameters, {'refresh': 'true'});
+  });
+
+  test('administration uses its routes and methods', () async {
+    final seen = <String>[];
+    final fake = MockClient((request) async {
+      if (request.url.path == '/api/login') {
+        return http.Response(jsonEncode(_tokens), 200);
+      }
+      seen.add('${request.method} ${request.url.path}');
+      return switch (request.url.path) {
+        '/api/sessions' => http.Response(
+          jsonEncode([
+            {'id': 4, 'device_label': 'Pixel', 'scope': 'admin'},
+          ]),
+          200,
+        ),
+        '/api/audit' => http.Response(
+          jsonEncode([
+            {'id': 1, 'at': 5, 'action': 'send_sms', 'subject': 'lisa01'},
+          ]),
+          200,
+        ),
+        '/api/totp' when request.method == 'POST' => http.Response(
+          jsonEncode({
+            'secret': 'S',
+            'recovery_codes': ['r1'],
+          }),
+          200,
+        ),
+        _ => http.Response('', 204),
+      };
+    });
+    final client = GatewayClient(
+      baseUrl: Uri.parse('https://gateway.example'),
+      httpClient: fake,
+    );
+    await _login(client);
+
+    expect((await client.sessions()).single.deviceLabel, 'Pixel');
+    await client.revokeSession(4);
+    await client.revokeAllSessions();
+    expect((await client.audit(limit: 10)).single.action, 'send_sms');
+    expect((await client.enableTotp('pw')).recoveryCodes, ['r1']);
+    await client.disableTotp('pw');
+
+    expect(seen, [
+      'GET /api/sessions',
+      'DELETE /api/sessions/4',
+      'POST /api/sessions/revoke-all',
+      'GET /api/audit',
+      'POST /api/totp',
+      'DELETE /api/totp',
+    ]);
+  });
+
+  test('dialling and keys carry their JSON bodies', () async {
+    final bodies = <String, Object?>{};
+    final fake = MockClient((request) async {
+      if (request.url.path == '/api/login') {
+        return http.Response(jsonEncode(_tokens), 200);
+      }
+      bodies[request.url.pathSegments.last] = jsonDecode(request.body);
+      return http.Response(jsonEncode({'status': 'ok', 'accepted': true}), 200);
+    });
+    final client = GatewayClient(
+      baseUrl: Uri.parse('https://gateway.example'),
+      httpClient: fake,
+    );
+    await _login(client);
+
+    await client.dial('lisa01', '+7900');
+    await client.sendDtmf('lisa01', '1#');
+
+    expect(bodies, {
+      'dial': {'to': '+7900'},
+      'dtmf': {'digits': '1#'},
+    });
+  });
+
+  test('sending posts the message and returns the stored copy', () async {
+    late Map<String, dynamic> sent;
+    final fake = MockClient((request) async {
+      if (request.url.path == '/api/login') {
+        return http.Response(jsonEncode(_tokens), 200);
+      }
+      expect(request.method, 'POST');
+      expect(request.url.path, '/api/messages');
+      expect(request.headers['authorization'], 'Bearer access-2');
+      sent = jsonDecode(request.body) as Map<String, dynamic>;
+      return http.Response(
+        jsonEncode({
+          'accepted': true,
+          'event': {
+            'id': 9,
+            'unit': 'lisa01',
+            'kind': 'sms',
+            'address': '+7900',
+            'body': 'on my way',
+            'ts': 1700000000000,
+            'direction': 'out',
+            'raw_json': '{"kind": "sms", "direction": "out"}',
+          },
+        }),
+        200,
+      );
+    });
+    final client = GatewayClient(
+      baseUrl: Uri.parse('https://gateway.example'),
+      httpClient: fake,
+    );
+    await _login(client);
+
+    final event = await client.sendMessage('lisa01', '+7900', 'on my way');
+
+    expect(sent, {'unit': 'lisa01', 'to': '+7900', 'body': 'on my way'});
+    expect(event.id, 9);
+    expect(event.direction, 'out');
+    expect(event.body, 'on my way');
+  });
 
   for (final status in [403, 404]) {
     test('telemetry HTTP $status remains a typed gateway failure', () async {

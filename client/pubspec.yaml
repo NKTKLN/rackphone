@@ -30,6 +30,7 @@ dev_dependencies:
   flutter_test:
     sdk: flutter
   flutter_lints: ^6.0.0
+  fake_async: ^1.3.3
 
 # The companion app next door takes no third-party packages at all, and that is
 # right for an APK whose whole job is a dozen lines of SmsManager. It does not

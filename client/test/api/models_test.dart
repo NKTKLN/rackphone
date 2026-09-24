@@ -88,4 +88,58 @@ void main() {
     expect(stats.security?.lastLoginDevice, 'console');
     expect(stats.security?.totpEnabled, isTrue);
   });
+
+  test('a notification carries its app and title out of raw_json', () {
+    final event = GatewayEvent.fromJson(const {
+      'id': 3,
+      'unit': 'lisa01',
+      'kind': 'notification',
+      'address': 'org.telegram.messenger',
+      'body': 'see you at 7',
+      'raw_json': '{"app": "Telegram", "title": "Olga"}',
+    });
+
+    expect(event.app, 'Telegram');
+    expect(event.title, 'Olga');
+  });
+
+  test('a broken raw_json leaves the event readable', () {
+    final event = GatewayEvent.fromJson(const {
+      'id': 3,
+      'unit': 'lisa01',
+      'kind': 'sms',
+      'raw_json': '{not json',
+    });
+
+    expect(event.app, isNull);
+    expect(event.kind, 'sms');
+  });
+
+  test('the device clock is milliseconds, the host clock seconds', () {
+    const both = GatewayEvent(
+      id: 1,
+      unit: 'u',
+      kind: 'sms',
+      address: null,
+      body: null,
+      timestamp: 1700000000123,
+      direction: null,
+      duration: null,
+      receivedAt: 1700000999,
+    );
+    const hostOnly = GatewayEvent(
+      id: 2,
+      unit: 'u',
+      kind: 'sms',
+      address: null,
+      body: null,
+      timestamp: null,
+      direction: null,
+      duration: null,
+      receivedAt: 1700000999,
+    );
+
+    expect(both.occurredAt!.millisecondsSinceEpoch, 1700000000123);
+    expect(hostOnly.occurredAt!.millisecondsSinceEpoch, 1700000999000);
+  });
 }
