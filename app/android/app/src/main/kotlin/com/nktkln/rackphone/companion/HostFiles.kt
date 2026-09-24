@@ -26,6 +26,7 @@ object HostFiles {
     private const val STATUS = "status.json"
     private const val STATUS_ENV = "status.env"
     private const val OUTBOX = "outbox.jsonl"
+    private const val CONTACTS = "contacts.json"
 
     /**
      * How much of the outbox is kept. The host is expected to collect it; this
@@ -51,6 +52,13 @@ object HostFiles {
     fun statusEnvFile(context: Context): File = File(dir(context), STATUS_ENV)
 
     fun outboxFile(context: Context): File = File(dir(context), OUTBOX)
+
+    /** The address book, exported on request; see [Contacts]. */
+    fun contactsFile(context: Context): File = File(dir(context), CONTACTS)
+
+    fun publishContacts(context: Context, json: String) {
+        writeAtomic(contactsFile(context), json + "\n")
+    }
 
     /** Where the host reads a drained batch from. */
     fun inflightPath(context: Context): String =

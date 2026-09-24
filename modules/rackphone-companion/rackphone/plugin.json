@@ -139,6 +139,26 @@
       "label": "Reject ringing call"
     },
     {
+      "id": "contacts",
+      "label": "Export the address book"
+    },
+    {
+      "id": "dial",
+      "label": "Place a call"
+    },
+    {
+      "id": "end",
+      "label": "End the current call"
+    },
+    {
+      "id": "dtmf",
+      "label": "Press keys during a call"
+    },
+    {
+      "id": "dialer",
+      "label": "Make the app the default dialer"
+    },
+    {
       "id": "keepalive",
       "label": "Send the keepalive now"
     },

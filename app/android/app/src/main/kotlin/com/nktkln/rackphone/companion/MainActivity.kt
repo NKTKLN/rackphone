@@ -100,6 +100,7 @@ class MainActivity : FlutterActivity() {
                         Manifest.permission.READ_PHONE_STATE,
                         Manifest.permission.READ_PHONE_NUMBERS,
                         Manifest.permission.CALL_PHONE,
+                        Manifest.permission.READ_CONTACTS,
                     ),
                     PERMISSION_REQUEST,
                 )

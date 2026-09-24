@@ -98,6 +98,26 @@ class CommandReceiver : BroadcastReceiver() {
                 reply(result.optString("status") == "rejected", result)
             }
 
+            Commands.ACTION_DIAL -> {
+                val result = CallControl.dial(context, string(intent, Commands.EXTRA_TO).orEmpty())
+                reply(result.optString("status") == "dialing", result)
+            }
+
+            Commands.ACTION_END -> {
+                val result = CallControl.end(context)
+                reply(result.optString("status") == "ended", result)
+            }
+
+            Commands.ACTION_DTMF -> {
+                val result = CallControl.dtmf(string(intent, Commands.EXTRA_DIGITS).orEmpty())
+                reply(result.optString("status") == "sent", result)
+            }
+
+            Commands.ACTION_CONTACTS -> {
+                val result = Contacts.export(context)
+                reply(result.optString("status") == "exported", result)
+            }
+
             // Drain rotates the spool and reports how much is now in flight;
             // the batch itself is read from the file. A binder transaction is
             // the wrong place to carry two thousand messages, and the host is

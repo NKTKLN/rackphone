@@ -27,4 +27,13 @@ class CallControlTest {
         assertEquals("no_ringing_call", callOutcome(CallOperation.ANSWER, false, false))
         assertEquals("failed", callOutcome(CallOperation.REJECT, true, false))
     }
+
+    @Test
+    fun `only keypad keys can be sent as tones`() {
+        assertTrue(isDtmfDigits("1"))
+        assertTrue(isDtmfDigits("*102#"))
+        assertFalse(isDtmfDigits(""))
+        assertFalse(isDtmfDigits("12a"))
+        assertFalse(isDtmfDigits("1".repeat(33)))
+    }
 }

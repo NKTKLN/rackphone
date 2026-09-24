@@ -173,6 +173,34 @@ OUT=$(STUB_AM_DATA='{"status":"rejected"}' act reject)
 assert_contains "REJECT is broadcast" "$(sent)" "com.nktkln.rackphone.companion.REJECT"
 assert_contains "reject outcome is passed through" "$OUT" '"status":"rejected"'
 
+section "Calls are placed, ended and sent tones through the app"
+reset_app
+OUT=$(STUB_AM_DATA='{"status":"dialing","to":"+7900"}' act dial '+7900')
+assert_contains "DIAL is broadcast" "$(sent)" "com.nktkln.rackphone.companion.DIAL"
+assert_contains "the number is an extra" "$(sent)" "--es to +7900"
+assert_contains "dial outcome is passed through" "$OUT" '"status":"dialing"'
+reset_app
+OUT=$(act dial 2>&1); CODE=$?
+assert_eq "dial without a number is a usage error" "$CODE" "2"
+reset_app
+OUT=$(STUB_AM_DATA='{"status":"ended"}' act end)
+assert_contains "END is broadcast" "$(sent)" "com.nktkln.rackphone.companion.END"
+reset_app
+OUT=$(STUB_AM_DATA='{"status":"sent","digits":2}' act dtmf '1#')
+assert_contains "DTMF is broadcast" "$(sent)" "com.nktkln.rackphone.companion.DTMF"
+assert_contains "the keys are an extra" "$(sent)" "--es digits 1#"
+
+section "The address book is exported through a file"
+reset_app
+printf '[{"name":"Andrew","number":"+7900","normalized":"+7900"}]\n' >"$APP_DIR/contacts.json"
+OUT=$(STUB_AM_DATA='{"status":"exported","count":1}' act contacts)
+assert_contains "CONTACTS is broadcast" "$(sent)" "com.nktkln.rackphone.companion.CONTACTS"
+assert_contains "the file is what comes back" "$OUT" '"name":"Andrew"'
+reset_app
+OUT=$(STUB_AM_DATA='{"status":"rejected","error":"permission_denied"}' act contacts 2>&1)
+assert_contains "a refusal says why" "$OUT" "permission_denied"
+assert_not_contains "and hands back no stale list" "$OUT" '"name":"Andrew"'
+
 section "Reload pushes the declared settings, in precedence order"
 reset_app
 sh "$RP/reload.sh" >/dev/null 2>&1
