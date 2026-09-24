@@ -867,16 +867,18 @@ def test_the_screen_socket_owns_its_session(
 
             # A second device is refused with a token the client branches on.
             # The client tells "someone else has it" from "the network died"
-            # by this prefix, so it is asserted rather than left to prose.
+            # by this prefix, so it is asserted rather than left to prose - and
+            # it arrives as a close frame after the handshake, since a refusal
+            # during the handshake reaches the client as a bare HTTP 403.
             with (
                 client.websocket_connect("/api/units/lisa01/screen", headers=headers),
-                pytest.raises(WebSocketDisconnect) as refused,
                 client.websocket_connect(
                     "/api/units/lisa01/screen",
                     headers={"Authorization": f"Bearer {other.tokens.access}"},
-                ),
+                ) as second,
+                pytest.raises(WebSocketDisconnect) as refused,
             ):
-                pass
+                second.receive_bytes()
             assert refused.value.code == HTTP_WEBSOCKET_POLICY
             assert refused.value.reason.startswith(api.SESSION_BUSY_REASON)
             assert released()
@@ -1013,10 +1015,12 @@ def test_call_audio_route_handles_success_busy_and_capability(  # noqa: C901
 
         fake_sessions.busy = True
         with (
+            client.websocket_connect(
+                "/api/units/lisa01/call/audio", headers=headers
+            ) as refused_socket,
             pytest.raises(WebSocketDisconnect) as refused,
-            client.websocket_connect("/api/units/lisa01/call/audio", headers=headers),
         ):
-            pass
+            refused_socket.receive_bytes()
         assert refused.value.code == HTTP_WEBSOCKET_POLICY
         assert refused.value.reason == f"{api.SESSION_BUSY_REASON} laptop"
 
@@ -1497,3 +1501,79 @@ class TestStream:
         asyncio.run(open_and_close())
         assert presence.is_watched(1_060) is True
         assert presence.is_watched(1_061) is False
+
+
+def test_a_device_reconnecting_waits_out_its_own_release(  # noqa: C901
+    populated_store: EventStore,
+    tmp_path: Path,
+    repo: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Letting go takes seconds, so a device is not busy with itself."""
+    (repo / "units" / "lisa01.env").write_text("")
+    config = GatewayConfig(
+        admin=AdminConfig("admin", hash_password("right")),
+        unit_capabilities={"lisa01": frozenset({"calls"})},
+    )
+    auth_store = AuthStore(tmp_path / "auth.db")
+    login = LoginService(config, auth_store)
+    granted = login.log_in("admin", "right", "peer", "tablet", 1000)
+    assert granted.tokens is not None
+    headers = {"Authorization": f"Bearer {granted.tokens.access}"}
+    monkeypatch.setattr(api.time, "time", lambda: 1000)
+    monkeypatch.setattr(api, "RELEASE_POLL_SECONDS", 0)
+
+    class ReleasingSessions:
+        """Still held by this device for two tries, as a release in flight is."""
+
+        def __init__(self) -> None:
+            self.current: ScreenSession | None = None
+            self.tries = 0
+            self.clock = lambda: 1000
+
+        def acquire(self, unit: str, holder: str, now: int) -> ScreenSession:
+            self.tries += 1
+            if self.tries <= 2:
+                raise SessionBusy(holder, 900, "call")
+            self.current = ScreenSession(unit, holder, now, now, "43123")
+            return self.current
+
+        def heartbeat(
+            self, _unit: str, _now: int, _holder: str | None = None
+        ) -> ScreenSession | None:
+            return self.current
+
+        def get(self, _unit: str) -> ScreenSession | None:
+            return self.current
+
+        def release(self, _unit: str, _now: int) -> None:
+            self.current = None
+
+    sessions = ReleasingSessions()
+
+    class Relay:
+        def __init__(self, host: str, port: int) -> None:
+            del host, port
+
+        async def open(self) -> None:
+            pass
+
+        async def pump(self, websocket: Any, heartbeat: Any = None) -> None:
+            del heartbeat
+            await websocket.receive()
+
+        async def close(self) -> None:
+            pass
+
+    monkeypatch.setattr(api, "SessionManager", lambda **_kwargs: sessions)
+    monkeypatch.setattr(api, "VoiceRelay", Relay)
+    app = create_app(config, populated_store, login, sessions=SessionManager())
+    monkeypatch.setattr(api, "SessionManager", SessionManager)
+
+    with (
+        TestClient(app) as client,
+        client.websocket_connect("/api/units/lisa01/call/audio", headers=headers),
+    ):
+        pass
+    assert sessions.tries == 3
+    auth_store.close()

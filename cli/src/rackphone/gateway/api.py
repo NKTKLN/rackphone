@@ -98,6 +98,10 @@ SCREEN_HEARTBEAT_SECONDS = 10
 CALL_HEARTBEAT_SECONDS = 2
 # Shared with the client, which branches on it; see relay_screen.
 SESSION_BUSY_REASON = "session_busy"
+# How long a device's reconnect waits for its own previous session to finish
+# releasing, and how often it looks.
+RELEASE_GRACE_SECONDS = 8
+RELEASE_POLL_SECONDS = 0.5
 
 LimitQuery = Annotated[int, Query(ge=1, le=MAX_QUERY_LIMIT)]
 KNOWN_SCOPES = frozenset({SCOPE_READ, SCOPE_CONTROL, SCOPE_ADMIN})
@@ -424,6 +428,37 @@ def create_app(  # noqa: C901, PLR0913, PLR0915, PLR0917
             elif in_use is False and seen_in_use:
                 return
 
+    async def acquire_own(
+        manager: SessionManager, unit: str, holder: str
+    ) -> ScreenSession:
+        """Acquire a session, waiting out this same device's last one.
+
+        Args:
+            manager: The session owner for this kind of relay.
+            unit: Name of the rack unit.
+            holder: The connecting device's label.
+
+        Returns:
+            ScreenSession: The acquired session.
+
+        Raises:
+            SessionBusy: If another device holds it, or this one still does
+                once the grace period is over.
+        """
+        # Letting go takes seconds - the device side is stopped over adb - so a
+        # device that disconnects and connects again, or hangs up and takes the
+        # next call, would otherwise be told it is busy with itself.
+        deadline = time.monotonic() + RELEASE_GRACE_SECONDS
+        while True:
+            try:
+                return await asyncio.to_thread(
+                    manager.acquire, unit, holder, manager.clock()
+                )
+            except SessionBusy as exc:
+                if exc.holder != holder or time.monotonic() >= deadline:
+                    raise
+                await asyncio.sleep(RELEASE_POLL_SECONDS)
+
     async def hold_relay(websocket: WebSocket, unit: str, route: RelayRoute) -> None:
         """Hold a unit's session and relay its bytes over one WebSocket.
 
@@ -447,9 +482,7 @@ def create_app(  # noqa: C901, PLR0913, PLR0915, PLR0917
         acquired = False
         try:
             try:
-                session = await asyncio.to_thread(
-                    manager.acquire, unit, holder, manager.clock()
-                )
+                session = await acquire_own(manager, unit, holder)
                 acquired = True
             except SessionBusy as exc:
                 # A machine-readable prefix, not prose. The client tells "held
@@ -458,6 +491,10 @@ def create_app(  # noqa: C901, PLR0913, PLR0915, PLR0917
                 # without a single test noticing. Close reasons are capped at
                 # 123 bytes, so the holder is trimmed rather than risking a
                 # frame the peer rejects outright.
+                #
+                # Accepted first: a close before the handshake completes is an
+                # HTTP 403 on the wire, and the reason never reaches the client.
+                await websocket.accept()
                 await websocket.close(
                     code=1008, reason=f"{SESSION_BUSY_REASON} {exc.holder[:64]}"
                 )
@@ -469,9 +506,13 @@ def create_app(  # noqa: C901, PLR0913, PLR0915, PLR0917
                 websocket,
                 heartbeat=lambda: relay_heartbeat(route, unit, holder, refresh_id),
             )
-            await websocket.close()
+            # The client usually closed first - it hung up, or disconnected -
+            # and closing a closed socket raises; that is not a failure.
+            with contextlib.suppress(RuntimeError):
+                await websocket.close()
         except Exception:
-            await websocket.close(code=1011, reason=route.ended_reason)
+            with contextlib.suppress(RuntimeError):
+                await websocket.close(code=1011, reason=route.ended_reason)
         finally:
             # Nothing cancellable may stand between here and the release. By the
             # time this runs the client is usually gone and this task is already
