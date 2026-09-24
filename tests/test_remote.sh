@@ -37,9 +37,14 @@ EOF
 # A fake Android runtime: it records the options the server was given, and
 # stays alive as a started server does.
 ARGS="$WORK/server.args"
+# Like the real server with cleanup=true, it deletes the jar it was started
+# from - which is what once took the module's own jar with it.
+CLASSPATH_SEEN="$WORK/server.classpath"
 cat > "$WORK/bin/app_process" <<EOF
 #!/bin/sh
 printf '%s\n' "\$@" > "$ARGS"
+printf '%s\n' "\$CLASSPATH" > "$CLASSPATH_SEEN"
+rm -f "\$CLASSPATH"
 exec sleep 300
 EOF
 chmod +x "$WORK/bin/app_process"
@@ -114,6 +119,15 @@ cp "$WORK/app_process.keep" "$WORK/bin/app_process"
 
 section "Exclusive session"
 sh "$ACTION" start 0000beef >/dev/null
+assert_contains "the server stays awake for the session" "$(cat "$ARGS")" "stay_awake=true"
+assert_contains "and so does the screen, charging or not" "$(cat "$ARGS")" "screen_off_timeout=86400000"
+assert_not_contains "no option scrcpy 3 does not know" "$(cat "$ARGS")" "turn_screen_off"
+if [ -f "$JAR" ]; then
+  _ok "the module jar survives the server's cleanup"
+else
+  _bad "the module jar survives the server's cleanup" "$JAR was deleted"
+fi
+assert_not_contains "the server runs a staged copy" "$(cat "$CLASSPATH_SEEN")" "$JAR"
 assert_contains "the server is told the host's socket id" "$(cat "$ARGS")" "scid=0000beef"
 # Forward mode would have the phone listen, which is what an app could race.
 assert_not_contains "the server connects out rather than listening" \

@@ -65,12 +65,30 @@ start() {
   fi
   trap 'rmdir "$LOCK" 2>/dev/null' EXIT INT TERM
   verified_hash >/dev/null || return 1
+  # scrcpy's cleanup deletes the jar it was started from, because its own
+  # client pushes a fresh copy every time. Started from the module, the first
+  # session would delete the module's jar and every later one would find it
+  # missing. So each session runs a copy of the verified jar, and cleanup
+  # takes the copy.
+  _session_jar="$RUN/scrcpy-server.jar"
+  cp "$JAR" "$_session_jar" || { echo "could not stage the scrcpy server" >&2; return 1; }
 
   # app_process inherits CLASSPATH; key=value server options avoid a shell-built
   # command string and map directly onto the declared, host-validated settings.
-  CLASSPATH="$JAR" nohup app_process / com.genymobile.scrcpy.Server "$SCRCPY_VERSION" \
+  #
+  # power_on and a day-long screen_off_timeout because the unit is racked with
+  # its screen off: a session that let it doze would stream black to the
+  # operator a few seconds in. stay_awake alone is not enough here - it only
+  # holds while the unit counts as plugged in, and the battery plugin suspends
+  # charging to hold its limit. cleanup puts every one back when the session
+  # ends. scrcpy 3 has no server
+  # option for turning the panel off while mirroring - its own client does that
+  # with a control message - so turn_screen_off is not passed here; the server
+  # only warned about it and ignored it.
+  CLASSPATH="$_session_jar" nohup app_process / com.genymobile.scrcpy.Server "$SCRCPY_VERSION" \
     "video_bit_rate=$(cfg bitrate)" "max_size=$(cfg max_size)" \
-    "max_fps=$(cfg max_fps)" "turn_screen_off=$([ "$(cfg turn_screen_off)" = 1 ] && echo true || echo false)" \
+    "max_fps=$(cfg max_fps)" stay_awake=true power_on=true \
+    screen_off_timeout=86400000 \
     "show_touches=$([ "$(cfg show_touches)" = 1 ] && echo true || echo false)" \
     "scid=$1" audio=false cleanup=true \
     >"$RUN/remote.log" 2>&1 &
