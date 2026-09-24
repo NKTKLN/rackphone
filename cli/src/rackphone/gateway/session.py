@@ -49,6 +49,27 @@ class ScreenSession:
     local_port: str
 
 
+def same_session(current: ScreenSession | None, mine: ScreenSession | None) -> bool:
+    """Tell whether the session a manager holds is still this socket's one.
+
+    Args:
+        current: What the manager holds now.
+        mine: What this socket acquired.
+
+    Returns:
+        bool: True unless the session ended or another one replaced it.
+    """
+    # Not ==: every heartbeat stores a copy with a newer last_seen, so the
+    # acquired value never equals the held one after the first beat, and the
+    # socket that owns a session would never release it.
+    return (
+        current is not None
+        and mine is not None
+        and (current.holder, current.started_at, current.local_port)
+        == (mine.holder, mine.started_at, mine.local_port)
+    )
+
+
 class SessionBusy(RuntimeError):
     """Raised when a fresh session already owns the requested unit."""
 

@@ -73,7 +73,12 @@ from rackphone.gateway.login import LoginService, RefusalReason, Tokens
 from rackphone.gateway.presence import ClientPresence
 from rackphone.gateway.relay import ScreenRelay
 from rackphone.gateway.send import SendError, send_sms
-from rackphone.gateway.session import ScreenSession, SessionBusy, SessionManager
+from rackphone.gateway.session import (
+    ScreenSession,
+    SessionBusy,
+    SessionManager,
+    same_session,
+)
 from rackphone.gateway.store import (
     DEFAULT_QUERY_LIMIT,
     KIND_CALL,
@@ -475,7 +480,7 @@ def create_app(  # noqa: C901, PLR0913, PLR0915, PLR0917
             # manager's calls are synchronous, so they are made directly;
             # blocking this loop for the length of one adb call is the cheaper
             # of the two failures.
-            if acquired and manager.get(unit) == session:
+            if acquired and same_session(manager.get(unit), session):
                 # An explicit takeover may replace this socket's session while
                 # the pump unwinds. The old socket must not release the new
                 # owner, which is what the comparison above is for.

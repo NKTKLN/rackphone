@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import dataclasses
 from collections.abc import Iterator
 
 import pytest
@@ -9,7 +10,12 @@ import pytest
 from rackphone import units
 from rackphone.device import adb
 from rackphone.gateway import session
-from rackphone.gateway.session import SessionBusy, SessionManager
+from rackphone.gateway.session import (
+    ScreenSession,
+    SessionBusy,
+    SessionManager,
+    same_session,
+)
 
 pytestmark = pytest.mark.usefixtures("device_calls")
 
@@ -190,3 +196,16 @@ def test_release_reports_an_unreachable_device(
         lambda *_args, **_kwargs: (_ for _ in ()).throw(adb.AdbError("offline")),
     )
     SessionManager().release("one", 100)
+
+
+class TestSameSession:
+    def test_a_heartbeat_does_not_make_it_another_session(self) -> None:
+        mine = ScreenSession("lisa01", "tablet", 100, 100, "4000")
+        beaten = dataclasses.replace(mine, last_seen=160)
+        assert same_session(beaten, mine)
+
+    def test_a_takeover_is_another_session(self) -> None:
+        mine = ScreenSession("lisa01", "tablet", 100, 100, "4000")
+        taken = ScreenSession("lisa01", "laptop", 150, 150, "4001")
+        assert not same_session(taken, mine)
+        assert not same_session(None, mine)
