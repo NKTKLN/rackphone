@@ -190,8 +190,8 @@ docs/              install walkthrough, plugin contract, metric reference, adb s
 ./tests/run.sh
 ```
 
-**761 checks**: 411 pytest, 168 shell, 71 in the companion app (39 Dart,
-32 Kotlin), 85 in the client (83 Dart, 2 Kotlin), 27 live-device. The device
+**878 checks**: 446 pytest, 194 shell, 77 in the companion app (39 Dart,
+38 Kotlin), 134 in the client (132 Dart, 2 Kotlin), 27 live-device. The device
 tests skip themselves when nothing is attached, so the suite runs on a machine
 with no phone.
 

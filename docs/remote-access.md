@@ -103,12 +103,28 @@ Takeover is not a nicety. A client that dropped its network, slept, or was
 force-stopped still holds the session, and without a way to take it the phone
 becomes unreachable until the heartbeat expires.
 
+The tunnels are built so that no app on the unit can get in between. An
+abstract socket has no permissions: whoever connects to one first gets it.
+
+- **Screen.** The gateway opens a listener and has adbd hold the socket name
+  (`adb reverse --no-rebind`) *before* the server starts; the server then
+  connects out to it, as upstream scrcpy does by default. Apps cannot connect
+  to adbd's sockets, and a name that is already taken fails the reverse
+  instead of being shared.
+- **Call audio.** The bridge listens, behind an `adb forward`, and checks who
+  connected: anything but adbd and root is turned away.
+
+Both names carry a fresh random id per session, passed to `action start`, as
+scrcpy's own client does with `scid=`.
+
 ### Screen wire format
 
 The screen uses one WebSocket for both scrcpy connections. Every binary message
 starts with a channel byte: `0` carries video and `1` carries control; the rest
-of the message is passed through unchanged. The client must open video first
-and control second, matching scrcpy's `tunnel_forward=true` ordering. Unknown
+of the message is passed through unchanged. The server connects video first and
+control second, which is how the gateway tells them apart. Because the server
+connects to the host rather than the other way round, the video stream starts
+with the device name and has no leading dummy byte. Unknown
 channel bytes are ignored so a newer client cannot end a session merely by
 sending a channel this gateway does not yet know.
 
@@ -171,6 +187,11 @@ The two-token split is what makes "log in once" and "revoke instantly" both
 true. The refresh token is the thing a phone keeps; the access token is what
 signs requests, and it expires on its own, so a revoked device stops working
 within fifteen minutes without a database lookup on every video frame.
+
+A screen or call socket is the exception, because it outlives any one access
+token. Control routes and both sockets check that the token's session is still
+live, and a socket repeats that check on every heartbeat, so revoking a device
+closes a relay it already holds within ten seconds.
 
 A login asks for the scope it wants and gets no more. The default is `control`,
 not `admin`: the app needs the screen and the send route, not the action log, and
@@ -406,11 +427,10 @@ Anything outside that directory is a host operation — `rackphone install`,
 
 ## Sending
 
-`POST /api/messages` currently answers `501`
-(`cli/src/rackphone/gateway/api.py:162`) with a note that the device path exists
-but is not wired to the route. It gets wired: the companion app holds
-`SEND_SMS`, the host already drives it through `rackphone action companion`, and
-the request shape was settled when the route was reserved.
+`POST /api/messages` sends through the companion app, which holds `SEND_SMS`
+and which the host already drives through `rackphone action companion`. The
+message is then stored as an outgoing `sms` event, so the client's conversations
+hold both sides — see [messaging.md](messaging.md#sending).
 
 It requires `control` scope, not `read` — a token that may look at messages must
 not be able to spend money on the SIM. Without this route the only way to send
@@ -431,11 +451,20 @@ the cable it came from.
 
 | Surface | Contents |
 | --- | --- |
-| Top bar | Unit switcher |
-| Data | Store counters, recent actions, one live scrape of the unit |
-| Notifications | SMS, calls and app notifications in one feed |
-| SMS | Send to a number |
-| Screen | The session |
+| Drawer | Unit switcher, then Home, Messages, Phone, Notifications, Screen; Files and Settings |
+| Home | One live scrape of the unit, the newest conversations and calls |
+| Messages | Conversations by number, both sides, and sending |
+| Phone | The call log, the unit's address book, a dial pad |
+| Notifications | App notifications collected on the unit |
+| Screen | The session, fullscreen on demand |
+
+Calls go out as well as in: `POST /api/units/{unit}/call/dial` places one,
+`/call/end` hangs up, and `/call/dtmf` presses keys for a menu that asks for
+them. The last two need the companion to hold the dialer role, because only the
+in-call service gets the `Call` they act on. Dialling is audited with its
+target; keys are not, because a bank's menu takes PINs.
+`GET /api/units/{unit}/contacts` returns the unit's address book, read over adb
+and kept for five minutes.
 
 `/health` stays open so a probe still works, and carries nothing worth reading:
 status, version, and whether ntfy and TOTP are on. The counters moved to
@@ -513,9 +542,10 @@ Each step is useful on its own, and each is safe to stop after.
 All six are built. Two things about the client turned out differently from the
 sketch above, and are worth naming rather than leaving to be discovered:
 
-- **Files are not a fifth destination.** The bottom bar holds the four places an
-  operator lives; a transfer is an errand, so it is an action in the app bar,
-  and it is absent for a unit without the `files` capability.
+- **Files are not a destination.** The drawer's destinations are the places an
+  operator lives; a transfer is an errand, so Files opens over the page — from
+  the drawer or the screen's action button — and is absent for a unit without
+  the `files` capability.
 - **Choosing a file is a method channel, not a package.** The obvious dependency
   does not build against the current Android Gradle plugin, and picking a
   document is two intents on the one platform this app targets.

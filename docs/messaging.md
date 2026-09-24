@@ -92,15 +92,30 @@ Arbitrary sends go through the app's `SEND` broadcast, which the host reaches
 over adb. `POST /api/messages` accepts `{unit, to, body}` with a `control` token
 and sends through that unit's companion plugin. The unit must have the `sms`
 capability. A successful request returns the device's outbox record, including
-whether it was accepted and its record id. Invalid destinations and empty bodies
-return 400, unknown units return 404, and an unreachable or refusing phone
-returns 502.
+whether it was accepted and its record id, plus `event`: the message as stored.
+Invalid destinations and empty bodies return 400, unknown units return 404, and
+an unreachable or refusing phone returns 502.
+
+A sent message is stored beside the ones that arrived, as an `sms` event with
+`direction: "out"`, so a conversation shows both sides and every client sees it
+over the stream. It takes a negative `source_id`, which the device's own ids
+never reach, so a send can never be mistaken for a redelivered arrival.
+Retention treats it like any other SMS.
 
 Each send records the unit and destination in the audit log. Message content is
 never included there, so the audit log does not become another outbox.
 
 See [the app's README](../app/README.md) for the broadcast surface, including the
 quoting trap that silently truncates a multi-word body.
+
+## Contacts
+
+`GET /api/units/{unit}/contacts` returns the unit's own address book: a name,
+the number as saved, and its E.164 form when the device knows it. It is read
+over adb through the companion's `contacts` action and kept for five minutes;
+`?refresh=true` reads it again now. The unit needs the `sms` capability, since
+names are only worth having next to messages and calls, and the companion needs
+`READ_CONTACTS`. It is read-only: contacts are edited on the unit.
 
 ## Keepalive
 
