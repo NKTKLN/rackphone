@@ -1,0 +1,17 @@
+This module ships an unmodified copy of the scrcpy server:
+
+    scrcpy-server.jar     scrcpy v3.3.1
+    https://github.com/Genymobile/scrcpy/releases/tag/v3.3.1
+    sha256 in scrcpy-server.sha256, verified before every start
+
+Copyright (C) 2018 Genymobile
+Copyright (C) 2018-2025 Romain Vimont
+
+Licensed under the Apache License, Version 2.0; the full text is in
+LICENSE.scrcpy beside this file. Rackphone itself is MIT (../../../LICENSE.md),
+and the two are compatible - which is why the notice is here rather than the
+jar being repackaged.
+
+The version is pinned because the server's protocol is private and shifts
+between releases: action.sh names the same version it verifies, and the client
+parses that version's framing. Upgrading means changing all three together.

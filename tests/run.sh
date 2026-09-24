@@ -5,6 +5,9 @@ set -uo pipefail
 HERE=$(cd "$(dirname "$0")" && pwd)
 REPO=$(cd "$HERE/.." && pwd)
 RC=0
+# CI and sandboxed checkouts may expose a read-only home cache. Keep uv's
+# disposable lock and wheels in /tmp unless the caller chose a cache explicitly.
+export UV_CACHE_DIR=${UV_CACHE_DIR:-/tmp/rackphone-uv-cache}
 
 banner() { printf '\n\033[1;36m━━━ %s ━━━\033[0m\n' "$1"; }
 
@@ -30,12 +33,14 @@ bad = 0
 for decl in sorted(root.glob("modules/*/rackphone/plugin.json")):
     d = json.loads(decl.read_text())
     env = decl.parent / "defaults.env"
+    # Source trees may omit generated defaults; build-modules.sh creates them.
+    if not env.exists():
+        continue
     have = {}
-    if env.exists():
-        for line in env.read_text().splitlines():
-            if line.strip() and not line.startswith("#") and "=" in line:
-                k, v = line.split("=", 1)
-                have[k.strip()] = v
+    for line in env.read_text().splitlines():
+        if line.strip() and not line.startswith("#") and "=" in line:
+            k, v = line.split("=", 1)
+            have[k.strip()] = v
     for s in d.get("settings", []):
         want = str(s.get("default", ""))
         if have.get(s["key"]) != want:
@@ -49,7 +54,7 @@ print("  defaults.env agrees with plugin.json" if not bad else "")
 sys.exit(bad)
 PY
 
-for t in test_resolve test_metrics test_battery test_companion; do
+for t in test_resolve test_metrics test_battery test_companion test_remote test_voice; do
   banner "${t#test_}"
   bash "$HERE/$t.sh" || RC=1
 done

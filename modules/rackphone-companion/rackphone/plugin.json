@@ -18,6 +18,13 @@
       "help": "Missed and answered. The app sees the phone state rather than the call log, so a rejected call is reported as missed - on an unattended unit the actionable fact is the same."
     },
     {
+      "key": "collect_notifications",
+      "type": "bool",
+      "default": "0",
+      "label": "Collect app notifications",
+      "help": "Copies arbitrary third-party notification content off the device. Off by default because only the operator can decide whether that privacy cost is acceptable."
+    },
+    {
       "key": "include_body",
       "type": "bool",
       "default": "1",
@@ -120,6 +127,38 @@
       "label": "Issue the control token"
     },
     {
+      "id": "send",
+      "label": "Send one message"
+    },
+    {
+      "id": "answer",
+      "label": "Answer ringing call"
+    },
+    {
+      "id": "reject",
+      "label": "Reject ringing call"
+    },
+    {
+      "id": "contacts",
+      "label": "Export the address book"
+    },
+    {
+      "id": "dial",
+      "label": "Place a call"
+    },
+    {
+      "id": "end",
+      "label": "End the current call"
+    },
+    {
+      "id": "dtmf",
+      "label": "Press keys during a call"
+    },
+    {
+      "id": "dialer",
+      "label": "Make the app the default dialer"
+    },
+    {
       "id": "keepalive",
       "label": "Send the keepalive now"
     },
@@ -137,7 +176,10 @@
     "ready",
     "pending",
     "dropped",
+    "ringing",
+    "ringing_from",
     "collecting",
+    "listener",
     "alarms",
     "keepalive",
     "next_due",

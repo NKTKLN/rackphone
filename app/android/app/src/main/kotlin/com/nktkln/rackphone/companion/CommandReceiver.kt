@@ -88,6 +88,36 @@ class CommandReceiver : BroadcastReceiver() {
 
             Commands.ACTION_STATUS -> reply(true, HostFiles.writeStatus(context))
 
+            Commands.ACTION_ANSWER -> {
+                val result = CallControl.answer(context)
+                reply(result.optString("status") == "answered", result)
+            }
+
+            Commands.ACTION_REJECT -> {
+                val result = CallControl.reject(context)
+                reply(result.optString("status") == "rejected", result)
+            }
+
+            Commands.ACTION_DIAL -> {
+                val result = CallControl.dial(context, string(intent, Commands.EXTRA_TO).orEmpty())
+                reply(result.optString("status") == "dialing", result)
+            }
+
+            Commands.ACTION_END -> {
+                val result = CallControl.end(context)
+                reply(result.optString("status") == "ended", result)
+            }
+
+            Commands.ACTION_DTMF -> {
+                val result = CallControl.dtmf(string(intent, Commands.EXTRA_DIGITS).orEmpty())
+                reply(result.optString("status") == "sent", result)
+            }
+
+            Commands.ACTION_CONTACTS -> {
+                val result = Contacts.export(context)
+                reply(result.optString("status") == "exported", result)
+            }
+
             // Drain rotates the spool and reports how much is now in flight;
             // the batch itself is read from the file. A binder transaction is
             // the wrong place to carry two thousand messages, and the host is
@@ -168,6 +198,7 @@ class CommandReceiver : BroadcastReceiver() {
         int(intent, Commands.EXTRA_SUB)?.let { config.subId = it }
         bool(intent, Commands.EXTRA_COLLECT_SMS)?.let { config.collectSms = it }
         bool(intent, Commands.EXTRA_COLLECT_CALLS)?.let { config.collectCalls = it }
+        bool(intent, "collect_notifications")?.let { config.collectNotifications = it }
         bool(intent, Commands.EXTRA_INCLUDE_BODY)?.let { config.includeBody = it }
         int(intent, Commands.EXTRA_INBOX_CAP)?.let { config.inboxCap = it }
         string(intent, Commands.EXTRA_BALANCE_CODE)?.let { config.balanceCode = it }

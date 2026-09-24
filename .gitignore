@@ -30,3 +30,13 @@ DEPLOY.local.md
 
 # Черновики вырезанных кусков документации, не для публикации.
 tmp/
+
+# Kotlin build cache, written beside the Gradle project.
+.kotlin/
+
+# A release signing identity is the developer's, not the repository's.
+client/android/key.properties
+app/android/key.properties
+
+# Built from modules/rackphone-voice/src by build.sh; a compiled artifact.
+modules/rackphone-voice/rackphone/voice-bridge.dex

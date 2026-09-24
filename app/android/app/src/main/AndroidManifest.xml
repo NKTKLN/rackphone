@@ -13,6 +13,8 @@
     <!-- USSD. sendUssdRequest is the only supported way to ask the network a
          question - balance, tariff - and it is gated on CALL_PHONE. -->
     <uses-permission android:name="android.permission.CALL_PHONE"/>
+    <!-- Runtime permission for accepting or ending a ringing call remotely. -->
+    <uses-permission android:name="android.permission.ANSWER_PHONE_CALLS"/>
 
     <!-- Receiving. RECEIVE_SMS is enough to be handed every arriving message;
          being the default SMS app would additionally mean owning the inbox,
@@ -20,6 +22,9 @@
          caller's number visible on a PHONE_STATE broadcast since Android 9. -->
     <uses-permission android:name="android.permission.RECEIVE_SMS"/>
     <uses-permission android:name="android.permission.READ_CALL_LOG"/>
+    <!-- Names for numbers. The host shows who wrote or called, and the unit's
+         own address book is where those names already are. Read-only. -->
+    <uses-permission android:name="android.permission.READ_CONTACTS"/>
 
     <application
         android:label="@string/app_name"
@@ -65,8 +70,48 @@
                 <action android:name="com.nktkln.rackphone.companion.RESET"/>
                 <action android:name="com.nktkln.rackphone.companion.USSD"/>
                 <action android:name="com.nktkln.rackphone.companion.BALANCE"/>
+                <action android:name="com.nktkln.rackphone.companion.ANSWER"/>
+                <action android:name="com.nktkln.rackphone.companion.REJECT"/>
+                <action android:name="com.nktkln.rackphone.companion.CONTACTS"/>
+                <action android:name="com.nktkln.rackphone.companion.DIAL"/>
+                <action android:name="com.nktkln.rackphone.companion.END"/>
+                <action android:name="com.nktkln.rackphone.companion.DTMF"/>
             </intent-filter>
         </receiver>
+
+        <!-- The dialer role. Android grants it only to an app with a dial
+             screen and an in-call service; the screen closes at once, and the
+             service is what hands this app the Call objects that DTMF and
+             ending a placed call need. Taken with
+             `cmd role add-role-holder android.app.role.DIALER <package>`. -->
+        <activity
+            android:name=".DialActivity"
+            android:exported="true"
+            android:excludeFromRecents="true"
+            android:noHistory="true"
+            android:theme="@android:style/Theme.Translucent.NoTitleBar">
+            <intent-filter>
+                <action android:name="android.intent.action.DIAL"/>
+                <category android:name="android.intent.category.DEFAULT"/>
+            </intent-filter>
+            <intent-filter>
+                <action android:name="android.intent.action.DIAL"/>
+                <category android:name="android.intent.category.DEFAULT"/>
+                <data android:scheme="tel"/>
+            </intent-filter>
+        </activity>
+
+        <service
+            android:name=".RackInCallService"
+            android:exported="true"
+            android:permission="android.permission.BIND_INCALL_SERVICE">
+            <meta-data
+                android:name="android.telecom.IN_CALL_SERVICE_UI"
+                android:value="true"/>
+            <intent-filter>
+                <action android:name="android.telecom.InCallService"/>
+            </intent-filter>
+        </service>
 
         <!-- Incoming SMS. Restricted to BROADCAST_SMS, which only the system
              holds, so nothing installed on the device can fabricate one. -->
@@ -85,6 +130,19 @@
                 <action android:name="android.intent.action.PHONE_STATE"/>
             </intent-filter>
         </receiver>
+
+        <!-- App notifications. Root grants and revokes this listener alongside
+             collect_notifications, because merely ignoring a bound listener
+             would still expose every notification to this process. -->
+        <service
+            android:name=".NotificationCollector"
+            android:exported="false"
+            android:label="@string/app_name"
+            android:permission="android.permission.BIND_NOTIFICATION_LISTENER_SERVICE">
+            <intent-filter>
+                <action android:name="android.service.notification.NotificationListenerService"/>
+            </intent-filter>
+        </service>
 
         <!-- Delivery outcomes from the radio. Explicit-component PendingIntents,
              so nothing needs to be exported. -->

@@ -29,6 +29,7 @@ class Config private constructor(private val prefs: SharedPreferences) {
         private const val KEY_REQUEST_CODE = "request_code"
         private const val KEY_COLLECT_SMS = "collect_sms"
         private const val KEY_COLLECT_CALLS = "collect_calls"
+        private const val KEY_COLLECT_NOTIFICATIONS = "collect_notifications"
         private const val KEY_INCLUDE_BODY = "include_body"
         private const val KEY_INBOX_CAP = "inbox_cap"
         private const val KEY_INBOX_SEQUENCE = "inbox_sequence"
@@ -175,6 +176,11 @@ class Config private constructor(private val prefs: SharedPreferences) {
     var collectCalls: Boolean
         get() = prefs.getBoolean(KEY_COLLECT_CALLS, true)
         set(value) = prefs.edit().putBoolean(KEY_COLLECT_CALLS, value).apply()
+
+    /** Whether third-party app notifications are spooled for the host. */
+    var collectNotifications: Boolean
+        get() = prefs.getBoolean(KEY_COLLECT_NOTIFICATIONS, false)
+        set(value) = prefs.edit().putBoolean(KEY_COLLECT_NOTIFICATIONS, value).apply()
 
     /**
      * Off relays the sender and the time without the text. The host then knows

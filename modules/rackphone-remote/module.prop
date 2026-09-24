@@ -1,0 +1,6 @@
+id=rackphone-remote
+name=Rackphone Remote
+version=v0.1.0
+versionCode=1
+author=nktkln
+description=One-session-at-a-time screen capture and input through a verified vendored scrcpy server.

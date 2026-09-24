@@ -279,7 +279,7 @@ rackphone - control surface for a Rackphone server unit
   rackphone origin <module>.<key>   which layer supplied it
   rackphone set <module>.<key> <v>  override (property + config.env)
   rackphone unset <module>.<key>    reset to the built-in default
-  rackphone action <module> <id>    run a declared action
+  rackphone action <module> <id> [arg...]  run a declared action
   rackphone doctor                  environment sanity check
 USAGE
 }
@@ -304,10 +304,13 @@ case "$cmd" in
            split_key "$1"; set_value "$_MOD" "$_KEY" "$2" ;;
   unset)   [ $# -eq 1 ] || die "usage: rackphone unset <module>.<key>"
            split_key "$1"; unset_value "$_MOD" "$_KEY" ;;
-  action)  [ $# -eq 2 ] || die "usage: rackphone action <module> <action-id>"
+  # An action may take arguments of its own - a send's destination and body,
+  # a session's socket id - and they pass through untouched, one argv each.
+  action)  [ $# -ge 2 ] || die "usage: rackphone action <module> <action-id> [arg...]"
            d=$(plugin_dir "$1") || die "no such plugin: $1"
            [ -f "$d/rackphone/action.sh" ] || die "plugin $1 declares no actions"
-           sh "$d/rackphone/action.sh" "$2" ;;
+           shift
+           sh "$d/rackphone/action.sh" "$@" ;;
   -h|--help|help) usage ;;
   *)       die "unknown command: $cmd (try: rackphone help)" ;;
 esac

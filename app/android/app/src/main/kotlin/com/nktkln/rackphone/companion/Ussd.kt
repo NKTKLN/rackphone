@@ -1,6 +1,11 @@
+// CALL_PHONE is checked through HostFiles.granted before sendUssdRequest, which also runs inside
+// runCatching.
+@file:SuppressLint("MissingPermission")
+
 package com.nktkln.rackphone.companion
 
 import android.Manifest
+import android.annotation.SuppressLint
 import android.content.Context
 import android.os.Handler
 import android.os.Looper

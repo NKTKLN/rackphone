@@ -24,26 +24,32 @@ person noticing that something went wrong.
 ## 🧩 How the pieces fit
 
 ```text
-Xiaomi 11 Lite 5G NE (lisa)             Host
+Xiaomi 11 Lite 5G NE (lisa)             Host                          You
 ┌─────────────────────────────────┐     ┌────────────────────────────┐
 │ LineageOS 23.1 + Magisk         │     │ adb server (owns the USB)  │
 │                                 │ USB │                            │
 │  rackphone-core     ─┐          │◄───►│  ┌──────────────────────┐  │
 │  rackphone-telemetry │          │     │  │ rackphone (Docker)   │  │
-│  rackphone-battery   ├ plugins  │     │  │  serve   → :9105     │  │
-│  rackphone-companion─┘          │     │  │  gateway → :9106     │  │
-│      └─ companion APK           │     │  └──────────┬───────────┘  │
-│         SEND_SMS, RECEIVE_SMS   │     │             │              │
-│                                 │     │             │              │
-│  `rackphone` CLI ← one          │     │             │              │
-│   control surface               │     │        Prometheus          │
-└─────────────────────────────────┘     │             │              │
-                                        │         Grafana            │
-                                        └────────────────────────────┘
+│  rackphone-battery   ├ plugins  │     │  │  serve   → :9105     │  │  ┌────────┐
+│  rackphone-companion │          │     │  │  gateway → :9106 ────┼──┼─►│ client │
+│  rackphone-remote   ─┘          │     │  └──────────┬───────────┘  │  │  app   │
+│      ├─ companion APK           │     │             │           TLS│  └────────┘
+│      │  SEND_SMS, RECEIVE_SMS   │     │        Prometheus          │      ▲
+│      └─ scrcpy-server (session) │     │             │              │   Caddy
+│                                 │     │         Grafana            │
+│  `rackphone` CLI ← one          │     └────────────────────────────┘
+│   control surface               │
+└─────────────────────────────────┘
 ```
 
 Collection happens **on the phone**. The host asks for a finished exposition with
 `adb exec-out rackphone metrics`, so a scrape costs one USB round-trip.
+
+The phone opens no socket. Everything that reaches it — a scrape, a message, a
+file, its screen — goes through the gateway and out over the cable, which is why
+the gateway is the only thing that ever needs authenticating. How that is built,
+and what it deliberately does not do, is in
+[docs/remote-access.md](docs/remote-access.md).
 
 ## 📦 Dependencies
 
@@ -155,18 +161,24 @@ Full reference in [docs/metrics.md](docs/metrics.md).
 ```text
 cli/               host-side CLI, src layout, one package per concern
   src/rackphone/device/    adb and the schema a unit reports
-  src/rackphone/gateway/   SMS and call relay: store, drain loop, filters, ntfy, API
+  src/rackphone/gateway/   relay, store, drain loop, filters, ntfy, screen sessions
+  src/rackphone/gateway/   authentication: scrypt, TOTP, lockouts, scoped tokens
   src/rackphone/metrics/   Prometheus bridge
   src/rackphone/cli/       the command tree, one module per command group
-  tests/                   258 checks, no device required
+  tests/                   411 checks, no device required
 modules/           Magisk modules, one directory per plugin
   rackphone-core/       config store, plugin discovery, on-device `rackphone`
   rackphone-telemetry/  Prometheus collector
   rackphone-battery/    charge-window guard
   rackphone-companion/  drives the app: settings, actions, status, metrics
+  rackphone-remote/     one verified scrcpy session, started and stopped on demand
 app/               the companion APK: the only thing that can send or receive
   lib/                  Flutter, the setup screen
-  android/.../kotlin/   the receivers, the sender, the keepalive schedule
+  android/.../kotlin/   the receivers, the sender, the notification collector
+client/            the operator's app: sign in, read, send, take the screen
+  lib/src/api/          models, typed errors, one HTTP client
+  lib/src/screen/       the scrcpy protocol, the MediaCodec decoder
+  lib/src/service/      the foreground service holding the event stream
 units/             declared state, one file per phone
 scripts/           module packaging, device inventory, Magisk install, host adb service
 docs/              install walkthrough, plugin contract, metric reference, adb server
@@ -178,9 +190,10 @@ docs/              install walkthrough, plugin contract, metric reference, adb s
 ./tests/run.sh
 ```
 
-**506 checks**: 258 pytest, 155 shell, 66 in the app (38 Dart, 28 Kotlin),
-27 live-device. The device tests skip
-themselves when nothing is attached, so the suite runs on a machine with no phone.
+**878 checks**: 446 pytest, 194 shell, 77 in the companion app (39 Dart,
+38 Kotlin), 134 in the client (132 Dart, 2 Kotlin), 27 live-device. The device
+tests skip themselves when nothing is attached, so the suite runs on a machine
+with no phone.
 
 | Suite | Covers |
 | --- | --- |
@@ -191,6 +204,8 @@ themselves when nothing is attached, so the suite runs on a machine with no phon
 | `app/test/` | `status.json` parsing, form validation, and the setup screen against a fake unit |
 | `app/android/.../test/` | Dialable numbers, and the per-SIM keepalive arithmetic |
 | `cli/tests/` | Schema validation, unit files, command effects, label injection, device resolution, store dedup, ntfy shaping, notification filters |
+| `tests/test_remote.sh` | The screen session: exclusivity, the checksum gate, a server that ignores TERM |
+| `client/test/` | The gateway client, the session, the stream parser, and every page |
 | `tests/test_integration.sh` | A real unit, the bridge, and Prometheus end to end |
 
 The shell suites run the **shipped scripts**, not copies. Module filesystem roots

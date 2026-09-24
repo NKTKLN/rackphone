@@ -16,8 +16,8 @@ from rackphone.gateway.config import GatewayConfig
 from rackphone.gateway.filters import (
     FilterConfigError,
     FilterRule,
-    first_match,
     load_rules,
+    should_push,
 )
 
 BEELINE_RULE = {
@@ -106,16 +106,53 @@ class TestMatching:
         event = make_event(address="Beeline", body=BEELINE_BODY)
         assert rule(enabled=False).matches_event(event) is False
 
-    def test_first_match_wins_and_is_named(self, make_event: EventFactory) -> None:
+    def test_first_deny_match_wins_and_is_named(self, make_event: EventFactory) -> None:
         rules = load_rules(
             [{"name": "everything-sms", "kind": "sms"}, {**BEELINE_RULE}]
         )
-        matched = first_match(make_event(body=BEELINE_BODY), rules)
+        push, matched = should_push(make_event(body=BEELINE_BODY), rules)
+        assert push is False
         assert matched is not None
         assert matched.name == "everything-sms"
 
     def test_no_rules_suppress_nothing(self, make_event: EventFactory) -> None:
-        assert first_match(make_event(), []) is None
+        assert should_push(make_event(), []) == (True, None)
+
+    def test_an_allow_rule_alone_limits_its_kind(
+        self, make_event: EventFactory
+    ) -> None:
+        rules = load_rules(
+            [{"name": "bank", "mode": "allow", "kind": "sms", "sender": "bank"}]
+        )
+        assert should_push(make_event(address="bank"), rules)[0] is True
+        push, deciding = should_push(make_event(address="friend"), rules)
+        assert push is False
+        assert deciding is rules[0]
+
+    def test_a_narrower_deny_wins_over_an_allow(self, make_event: EventFactory) -> None:
+        rules = load_rules(
+            [
+                {"name": "bank", "mode": "allow", "kind": "sms", "sender": "bank*"},
+                {
+                    "name": "adverts",
+                    "mode": "deny",
+                    "kind": "sms",
+                    "sender": "bank*",
+                    "contains": "offer",
+                },
+            ]
+        )
+        push, deciding = should_push(
+            make_event(address="bank-alerts", body="special offer"), rules
+        )
+        assert push is False
+        assert deciding is rules[1]
+
+    def test_allow_for_another_kind_does_not_affect_event(
+        self, make_event: EventFactory
+    ) -> None:
+        rules = load_rules([{"name": "calls", "mode": "allow", "kind": "call"}])
+        assert should_push(make_event(kind="sms"), rules) == (True, None)
 
 
 class TestConfiguration:
@@ -124,6 +161,10 @@ class TestConfiguration:
         # being notified again.
         with pytest.raises(FilterConfigError, match="no conditions"):
             load_rules([{"name": "oops"}])
+
+    def test_an_allow_rule_without_conditions_is_refused(self) -> None:
+        with pytest.raises(FilterConfigError, match="no conditions"):
+            load_rules([{"name": "oops", "mode": "allow"}])
 
     def test_an_unknown_key_is_refused(self) -> None:
         # `contain` would leave the rule matching on kind alone, silently
@@ -178,14 +219,16 @@ class TestConfiguration:
 
     def test_the_redacted_view_reports_how_many_rules_are_live(self) -> None:
         config = GatewayConfig(filters=load_rules([BEELINE_RULE]))
-        assert config.as_redacted_dict()["filters"] == "1 rule(s)"
+        assert config.as_redacted_dict()["filters"] == "0 allow, 1 deny, 0 off"
 
     def test_the_redacted_view_calls_out_disabled_rules(self) -> None:
         # A bare count would read as though a rule left switched off in the
         # file were still filtering something.
-        rules = load_rules([BEELINE_RULE, {**BEELINE_RULE, "enabled": False}])
+        rules = load_rules(
+            [BEELINE_RULE, {**BEELINE_RULE, "mode": "allow", "enabled": False}]
+        )
         assert GatewayConfig(filters=rules).as_redacted_dict()["filters"] == (
-            "2 rule(s), 1 off"
+            "1 allow, 1 deny, 1 off"
         )
 
     def test_no_filters_reads_as_none(self) -> None:

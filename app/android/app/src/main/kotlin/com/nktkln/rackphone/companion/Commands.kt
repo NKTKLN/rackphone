@@ -15,6 +15,16 @@ object Commands {
     const val ACTION_KEEPALIVE = "$PKG.KEEPALIVE"
     const val ACTION_STATUS = "$PKG.STATUS"
     const val ACTION_SETUP = "$PKG.SETUP"
+    const val ACTION_ANSWER = "$PKG.ANSWER"
+    const val ACTION_REJECT = "$PKG.REJECT"
+
+    /** Export the address book to a file the host reads. */
+    const val ACTION_CONTACTS = "$PKG.CONTACTS"
+
+    /** Place, end, and press keys on a call; see [CallControl]. */
+    const val ACTION_DIAL = "$PKG.DIAL"
+    const val ACTION_END = "$PKG.END"
+    const val ACTION_DTMF = "$PKG.DTMF"
 
     // The delivery contract with the host, in the same shape the shell
     // collector used: rotate, read, confirm.
@@ -33,6 +43,7 @@ object Commands {
     const val EXTRA_BODY = "body"
     const val EXTRA_ID = "id"
     const val EXTRA_SUB = "sub"
+    const val EXTRA_DIGITS = "digits"
 
     const val EXTRA_KEEPALIVE_ENABLED = "keepalive_enabled"
     const val EXTRA_KEEPALIVE_TO = "keepalive_to"

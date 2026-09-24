@@ -253,3 +253,82 @@ class TestPush:
         )
         with pytest.raises(adb.AdbError, match="no space left"):
             adb.push_file("AAA", LOCAL_ZIP, REMOTE_ZIP)
+
+
+class TestPull:
+    def test_a_successful_pull_is_silent(
+        self, fake_subprocess: list[list[str]]
+    ) -> None:
+        adb.pull_file("AAA", REMOTE_ZIP, LOCAL_ZIP)
+        assert fake_subprocess[0][-3:] == ["pull", REMOTE_ZIP, LOCAL_ZIP]
+
+    def test_a_failed_pull_raises(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(adb, "find_adb_binary", lambda: "/usr/bin/adb")
+        monkeypatch.setattr(
+            adb.subprocess,
+            "run",
+            lambda *_args, **_kwargs: FakeCompletedProcess(
+                stderr="device offline", returncode=1
+            ),
+        )
+        with pytest.raises(adb.AdbError, match="device offline"):
+            adb.pull_file("AAA", REMOTE_ZIP, LOCAL_ZIP)
+
+
+class TestForward:
+    """Host ports delegated to adb rather than hard-coded by the gateway."""
+
+    def test_ephemeral_forward_returns_the_bound_port(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Return adb's selected port and preserve fixed argument boundaries."""
+        calls: list[list[str]] = []
+
+        def answer(command: list[str], **_kwargs: object) -> FakeCompletedProcess:
+            calls.append(command)
+            return FakeCompletedProcess(stdout="43123\n")
+
+        monkeypatch.setattr(adb, "find_adb_binary", lambda: "/usr/bin/adb")
+        monkeypatch.setattr(adb.subprocess, "run", answer)
+        assert adb.forward("AAA", "tcp:0", "localabstract:scrcpy") == "43123"
+        assert calls[0][-5:] == [
+            "-s",
+            "AAA",
+            "forward",
+            "tcp:0",
+            "localabstract:scrcpy",
+        ]
+
+    def test_remove_forward_uses_the_named_local_endpoint(
+        self, fake_subprocess: list[list[str]]
+    ) -> None:
+        """Remove precisely the endpoint owned by the closing session."""
+        adb.remove_forward("AAA", "tcp:43123")
+        assert fake_subprocess[0][-5:] == [
+            "-s",
+            "AAA",
+            "forward",
+            "--remove",
+            "tcp:43123",
+        ]
+
+    def test_reverse_refuses_to_take_a_name_that_is_held(
+        self, fake_subprocess: list[list[str]]
+    ) -> None:
+        """Ask adb not to rebind, so a squatter on the name is noticed."""
+        adb.reverse("AAA", "localabstract:scrcpy_0000beef", "tcp:43123")
+        adb.remove_reverse("AAA", "localabstract:scrcpy_0000beef")
+        assert fake_subprocess[0][-6:] == [
+            "-s",
+            "AAA",
+            "reverse",
+            "--no-rebind",
+            "localabstract:scrcpy_0000beef",
+            "tcp:43123",
+        ]
+        assert fake_subprocess[1][-4:] == [
+            "AAA",
+            "reverse",
+            "--remove",
+            "localabstract:scrcpy_0000beef",
+        ]

@@ -6,7 +6,7 @@
 [![Android](https://img.shields.io/badge/Android-min%2026%20·%20target%2036-3DDC84?logo=android&logoColor=white)](https://developer.android.com/)
 [![Material](https://img.shields.io/badge/Material-3-757575?logo=materialdesign&logoColor=white)](https://m3.material.io/)
 [![Magisk](https://img.shields.io/badge/Magisk-driven%20by%20broadcast-00AF9C)](https://github.com/topjohnwu/Magisk)
-[![Tests](https://img.shields.io/badge/tests-38%20Dart%20·%2028%20Kotlin-0A9EDC?logo=flutter&logoColor=white)](#-tests)
+[![Tests](https://img.shields.io/badge/tests-39%20Dart%20·%2038%20Kotlin-0A9EDC?logo=flutter&logoColor=white)](#-tests)
 [![Conventional Commits](https://img.shields.io/badge/Conventional%20Commits-1.0.0-FE5196?logo=conventionalcommits&logoColor=white)](https://www.conventionalcommits.org/)
 [![License](https://img.shields.io/badge/License-MIT-blue)](../LICENSE.md)
 [![Made with Claude Code](https://img.shields.io/badge/Made%20with-Claude%20Code-D97757?logo=claude&logoColor=white)](https://claude.com/claude-code)
@@ -132,6 +132,11 @@ adb shell "am broadcast --user 0 \
 | `RESET` | — | Drops everything pending |
 | `USSD` | `code`, `sub` | Dials a USSD code and returns what the network said |
 | `BALANCE` | `force` | Runs the configured balance code on every SIM |
+| `ANSWER` / `REJECT` | — | Answers or rejects the ringing call |
+| `DIAL` | `to` | Places a call |
+| `END` | — | Ends whatever call the unit has |
+| `DTMF` | `digits` | Presses keypad keys on the connected call |
+| `CONTACTS` | — | Writes the address book to `contacts.json` and says how many |
 
 `result=0` means accepted, `result=1` means refused, and `data` is the JSON
 record either way. A refusal always names its reason: `bad_token`,
@@ -253,7 +258,27 @@ straight after.
 The limit of that route is worth stating: the app sees the phone state, not the
 call log, so a call the network or a blocklist rejected looks exactly like one
 nobody answered, and both are reported as `missed`. An outgoing call goes
-off-hook without ringing first, so nothing is recorded for it.
+off-hook without ringing first, so the phone state records nothing for it; the
+in-call service below logs it instead, as `direction: "out"`.
+
+### The dialer role
+
+Answering and rejecting work from any app holding `ANSWER_PHONE_CALLS`. Ending
+a call the unit placed and sending DTMF do not: both need the `Call` object,
+which Android hands only to the default dialer's in-call service. So the app
+can take that role, with a dial screen that closes as soon as it opens (the
+role requires one) and `RackInCallService`, which has no screen at all:
+
+```sh
+uv run --project cli rackphone action companion dialer
+```
+
+With the role, the stock dialer no longer shows calls on the unit's own screen;
+on a racked unit nobody is looking at it. Without the role, answer and reject
+still go through `TelecomManager`, and `DTMF` answers `no_call`.
+
+`READ_CONTACTS` is asked for alongside the rest, so the host can put names next
+to numbers; `CONTACTS` fails with `permission_denied` without it.
 
 Delivery to the host is at-least-once, and the contract is the one the host
 already speaks:
@@ -376,9 +401,9 @@ phone into a leak.
 ## 🧪 Tests
 
 ```sh
-task app-test          # 38 Dart tests: parsing, validation, the screen
-task app-test-native   # 28 Kotlin tests: numbers, schedules, balance parsing
-./tests/run.sh         # includes 49 assertions on the plugin that drives this
+task app-test          # 39 Dart tests: parsing, validation, the screen
+task app-test-native   # 38 Kotlin tests: numbers, schedules, balance, contacts, tones
+./tests/run.sh         # includes 68 assertions on the plugin that drives this
 ```
 
 The Dart tests drive the screen through a fake `CompanionControl`, so they cover
@@ -424,12 +449,6 @@ Verified on the hardware: built, installed with `pm grant`, `SETUP` issued a
 token, `STATUS` reported `ready`, and two `SEND` commands reached a real handset
 — `queued` in the reply, `ok` in the outbox about a second later, once the radio
 reported back.
-
-## 🔌 Not wired up yet
-
-One thing is still open: `POST /api/messages` in the CLI returns 501. The device
-can send and the plugin can reach it, but nothing connects that route to the
-broadcast yet.
 
 ## 📜 License
 

@@ -173,7 +173,46 @@ class NtfyForwarder:
         if not self.config.is_configured:
             return False
 
-        notification = render_notification(event, self.config)
+        return self._send_notification(render_notification(event, self.config))
+
+    def send_alert(self, reason: str, message: str) -> bool:
+        """Push a system alert regardless of event-delivery policy.
+
+        Args:
+            reason: Short machine-readable alert reason.
+            message: Human-readable sentence containing no credentials.
+
+        Returns:
+            bool: Whether the notification was accepted.
+
+        Raises:
+            NtfyError: If ntfy rejects the message, or stays unreachable for
+                the whole retry budget.
+        """
+        if not self.config.is_configured:
+            return False
+        return self._send_notification(
+            Notification(
+                title="Rackphone system alert",
+                message=message,
+                priority="urgent",
+                tags=f"rackphone,alert,{reason}",
+            )
+        )
+
+    def _send_notification(self, notification: Notification) -> bool:
+        """Post one rendered notification with bounded retry.
+
+        Args:
+            notification: Fully rendered notification to post.
+
+        Returns:
+            bool: Whether the notification was accepted.
+
+        Raises:
+            NtfyError: If ntfy rejects the message, or stays unreachable for
+                the whole retry budget.
+        """
         headers = {
             **notification.build_headers(),
             **self.config.build_auth_header(),

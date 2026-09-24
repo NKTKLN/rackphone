@@ -5,9 +5,41 @@
 poll_seconds = 5
 api_host = "127.0.0.1"
 api_port = 9106
+# X-Forwarded-For is accepted only from these directly connected proxies.
+trusted_proxies = ["127.0.0.1", "::1"]
 # api_token = "generate-a-long-random-string"
+# Two lifetimes, because "log in once" and "revoke now" are both wanted: the
+# refresh token is what a device keeps, the access token is what signs requests
+# and expires on its own, so a revoked device stops working within the shorter
+# one without a database lookup on every request.
+# access_ttl_seconds = 900
+# refresh_ttl_seconds = 2592000
+
+# A non-loopback API refuses to start without both administrator credentials.
+# [admin]
+# username = "admin"
+# password_hash = "generate-with-rackphone-admin"
+
+# How long each kind of event is kept. A rack unit produces notifications by
+# the hundred per day, so they expire; SMS and calls are few and worth keeping,
+# and 0 means forever. Removal runs hourly inside the drain loop.
+# [retention]
+# sms = 0
+# call = 0
+# notification = 30
+
+# Capabilities are narrowed here because authorisation belongs to the host, not
+# to device state a phone can read and edit. Units without a section keep all
+# capabilities, preserving access for configurations written before this key.
+# [units.lisa01]
+# capabilities = ["sms", "notifications", "screen", "files"]
 
 [ntfy]
+# ntfy is the second channel, independent of the app. `enabled = false` stops
+# it without losing the server details below; `mirror = true` pushes everything,
+# while the default pushes only what no connected client was there to receive.
+# enabled = true
+# mirror = false
 # Leave url empty to store and serve events without pushing anywhere.
 url = ""
 topic = ""
@@ -20,23 +52,28 @@ priority_call = "high"
 timeout = 10.0
 retries = 3
 
-# Filters decide what is worth a notification. A matched event is still stored
-# and still served on the API - only the push is suppressed - so a rule that
-# turns out to be too broad costs you an alert, never a message.
+# Filters decide what is worth a notification. An allow rule names what should
+# be pushed; a deny rule names what should be suppressed. Either way every event
+# is still stored and served on the API, so a mistake costs an alert, not data.
 #
 # Keys inside a rule are ANDed, values inside a key are ORed, and all matching
 # is case-insensitive: `sender` is a glob, `contains` a substring, `matches` a
 # regular expression over the body. A rule with no conditions is refused rather
-# than applied.
+# than applied. `mode` defaults to `deny`, preserving older configurations.
 #
 # [[filters]]
-# name = "beeline-app-links"
-# kind = "sms"
-# sender = "beeline"
-# contains = "https://dl.beeline.ru/"
+# name = "notify-only-these"
+# mode = "allow"
+# kind = "notification"
+# sender = ["com.bank.*", "org.telegram.*"]
 #
 # [[filters]]
-# name = "operator-ads"
-# kind = "sms"
-# sender = ["beeline", "mtc", "megafon", "tele2"]
-# matches = "(акци|тариф|подключ|скидк)"
+# name = "bank-adverts"
+# mode = "deny"
+# kind = "notification"
+# sender = "com.bank.*"
+# contains = "special offer"
+#
+# A matching deny wins. Otherwise an event kind with allow rules needs an allow
+# match; kinds with no allow rules continue to be pushed. This lets a broad
+# sender allow-list keep a precise exception for one unwanted notification.

@@ -89,11 +89,33 @@ uv run --project cli rackphone action companion keepalive   # prove the path
 ```
 
 Arbitrary sends go through the app's `SEND` broadcast, which the host reaches
-over adb. `POST /api/messages` still returns **501**: the device path exists now,
-but the route that would drive it from the API is not wired up yet.
+over adb. `POST /api/messages` accepts `{unit, to, body}` with a `control` token
+and sends through that unit's companion plugin. The unit must have the `sms`
+capability. A successful request returns the device's outbox record, including
+whether it was accepted and its record id, plus `event`: the message as stored.
+Invalid destinations and empty bodies return 400, unknown units return 404, and
+an unreachable or refusing phone returns 502.
+
+A sent message is stored beside the ones that arrived, as an `sms` event with
+`direction: "out"`, so a conversation shows both sides and every client sees it
+over the stream. It takes a negative `source_id`, which the device's own ids
+never reach, so a send can never be mistaken for a redelivered arrival.
+Retention treats it like any other SMS.
+
+Each send records the unit and destination in the audit log. Message content is
+never included there, so the audit log does not become another outbox.
 
 See [the app's README](../app/README.md) for the broadcast surface, including the
 quoting trap that silently truncates a multi-word body.
+
+## Contacts
+
+`GET /api/units/{unit}/contacts` returns the unit's own address book: a name,
+the number as saved, and its E.164 form when the device knows it. It is read
+over adb through the companion's `contacts` action and kept for five minutes;
+`?refresh=true` reads it again now. The unit needs the `sms` capability, since
+names are only worth having next to messages and calls, and the companion needs
+`READ_CONTACTS`. It is read-only: contacts are edited on the unit.
 
 ## Keepalive
 
@@ -151,6 +173,7 @@ Device settings, through the normal plugin contract:
 | --- | --- | --- |
 | `companion.collect_sms` | `1` | Arriving messages; sent ones are never relayed |
 | `companion.collect_calls` | `1` | Missed and answered incoming |
+| `companion.collect_notifications` | `0` | App notifications; deliberately off because they may contain arbitrary third-party content |
 | `companion.include_body` | `1` | Off relays sender and time only |
 | `companion.inbox_cap` | `2000` | Oldest dropped past this, and counted |
 | `companion.keepalive_enabled` | `0` | Off by default: it spends money on a SIM whose terms only you know |
@@ -266,10 +289,17 @@ Filters are host-side rules in `gateway.toml` that decide what gets pushed:
 
 ```toml
 [[filters]]
-name = "beeline-app-links"
-kind = "sms"
-sender = "beeline"
-contains = "https://dl.beeline.ru/"
+name = "notify-only-these"
+mode = "allow"
+kind = "notification"
+sender = ["com.bank.*", "org.telegram.*"]
+
+[[filters]]
+name = "bank-adverts"
+mode = "deny"
+kind = "notification"
+sender = "com.bank.*"
+contains = "special offer"
 ```
 
 **A filter suppresses the push, never the record.** The message is still
@@ -288,8 +318,9 @@ you an alert is recoverable; costing you the SMS is not.
 | Key | Matches |
 | --- | --- |
 | `name` | Label reported in `gwconfig`, in the drain log and nowhere else |
+| `mode` | `allow` pushes matches; `deny` suppresses them (the default) |
 | `unit` | Unit name, as in `units/*.env` |
-| `kind` | `sms` or `call` |
+| `kind` | `sms`, `call` or `notification` |
 | `sender` | The address, as a glob: `beeline`, `beeline*`, `+7900*` |
 | `contains` | A substring of the body |
 | `matches` | A regular expression over the body |
@@ -309,13 +340,16 @@ matches = "(акци|тариф|подключ)"
 
 All matching is case-insensitive: the case an operator writes its own name in is
 its choice, not something to encode in a rule that then breaks when they change
-it. Rules are tested in file order and the first match wins.
+it. A matching `deny` suppresses first. Otherwise, when an event's kind has any
+active `allow` rules, one of them must match for the event to be pushed. A kind
+with no allow rules is pushed as before. Deny wins so a broad sender allow-list
+can retain a precise exception for one unwanted message.
 
-Two rules are refused at startup rather than applied, because both fail as
-silence: one with **no conditions**, which would suppress everything, and one
-with an **unknown key**, since `contain` instead of `contains` would quietly
-widen a filter from one advert to every SMS. The gateway will not start until
-the file is fixed.
+Rules with **no conditions** are refused at startup: an empty deny rule would
+suppress everything, while an empty allow rule would make its allow-list
+meaningless. An **unknown key** is also refused, since `contain` instead of
+`contains` would quietly widen a rule. The gateway will not start until the file
+is fixed.
 
 ```sh
 uv run --project cli rackphone gwconfig   # lists every rule and what it matches
@@ -325,13 +359,33 @@ A rule that reads the body cannot match when `include_body=0`: nothing was
 relayed, so the condition cannot be shown to hold, and an unproven filter pushes
 rather than suppresses.
 
+## Retention
+
+A rack unit produces notifications by the hundred per day, while SMS and calls
+are fewer and generally worth keeping. Retention is therefore set independently
+by event kind:
+
+```toml
+[retention]
+sms = 0
+call = 0
+notification = 30
+```
+
+The value is days, and `0` keeps that kind forever. A kind absent from the table
+is also kept forever, so a newer event kind cannot be deleted by an older
+configuration. The drain loop prunes once an hour and asks SQLite to return the
+freed pages to the database file, rather than leaving a file that only appears
+to ignore retention.
+
 ## Privacy
 
 This pipes message content off the phone into a host database and onward to
 ntfy. Three controls:
 
 - `include_body=0` — the host learns that a message arrived, from whom and
-  when, without the content ever leaving the device.
+  when, without the content ever leaving the device. For app notifications it
+  still receives the package, app label, title and time, but not the text.
 - Incoming-only — the app is handed arriving messages by the system and never
   reads the inbox, so messages the unit sent, and calls it made, are not visible
   to it at all.
@@ -341,8 +395,20 @@ ntfy. Three controls:
 - Metrics carry **counters only**. No numbers, no bodies; a metric label is
   unbounded-cardinality by nature and Prometheus is the wrong store for content.
 
-App notification mirroring is deliberately not implemented. It would copy
-arbitrary third-party content off the device for no benefit to what this does.
+App notification mirroring **is** implemented, and it is the loosest of these
+controls: it copies arbitrary third-party content off the device. Two things
+narrow it. `collect_notifications=0` is the device default; when enabled, the
+listener records the sending package, app label, title, text and post time in
+the common spool, skipping ongoing notifications, group summaries and unchanged
+reposts. Pushes default to silence — a notification reaches the store and goes
+no further until an `allow` rule names its package — and the store forgets
+notifications after thirty days, while SMS and calls are kept. See
+[remote-access.md](remote-access.md).
+
+There is nobody at the rack to approve a notification listener in Settings, so
+the companion plugin grants it from root when collection is enabled and revokes
+it when collection is disabled. `rackphone status` reports whether the listener
+is actually bound, not merely whether the setting asks for it.
 
 An ntfy topic is a shared secret, not an access control. Anyone who knows the
 topic name can read it unless the server enforces auth on read.

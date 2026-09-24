@@ -30,6 +30,51 @@ case "${1:-}" in
       exit 1
     fi
     ;;
+  # Takes arguments, unlike every action above it: the destination and the
+  # text. Both are passed as extras rather than interpolated into a command,
+  # so a body containing a quote is a body and not a second command.
+  send)
+    if [ $# -lt 3 ]; then
+      echo "send needs a destination and a body" >&2
+      exit 2
+    fi
+    app_cmd SEND --es to "$2" --es body "$3"
+    ;;
+  answer) app_cmd ANSWER ;;
+  reject) app_cmd REJECT ;;
+  # Placing and ending a call, and pressing keys during one. The number and
+  # the keys are extras, never interpolated, like the body of a send.
+  dial)
+    if [ $# -lt 2 ]; then
+      echo "dial needs a destination" >&2
+      exit 2
+    fi
+    app_cmd DIAL --es to "$2"
+    ;;
+  end) app_cmd END ;;
+  dtmf)
+    if [ $# -lt 2 ]; then
+      echo "dtmf needs the keys to press" >&2
+      exit 2
+    fi
+    app_cmd DTMF --es digits "$2"
+    ;;
+  # The dialer role is what hands the app the call itself; without it answer
+  # and reject still work, but a placed call cannot be ended or sent tones.
+  dialer)
+    cmd role add-role-holder --user 0 android.app.role.DIALER "$APP_PKG" &&
+      echo "dialer role granted to $APP_PKG"
+    ;;
+  # The address book goes out through a file, as a drained batch does: the
+  # reply only says whether the export worked, and a refusal (no permission)
+  # is the reply itself, on stderr, so the host sees why.
+  contacts)
+    _reply=$(app_cmd CONTACTS)
+    case "$_reply" in
+      *'"status":"exported"'*) cat "$APP_DATA/contacts.json" ;;
+      *) echo "${_reply:-no reply from the app}" >&2; exit 1 ;;
+    esac
+    ;;
   keepalive) app_cmd KEEPALIVE --es force true ;;
   # The reply waits on the network, so this one is slower than the others by
   # design - the operator answers a USSD session in seconds, not instantly.

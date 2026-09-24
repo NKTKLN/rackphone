@@ -12,7 +12,27 @@ import pytest
 from rackphone import units
 from rackphone.device import adb
 from rackphone.metrics import exposition
-from rackphone.metrics.exposition import add_unit_label, collect_metrics
+from rackphone.metrics.exposition import add_unit_label, collect_metrics, parse_samples
+
+
+@pytest.fixture
+def real_exposition() -> str:
+    return (
+        "# HELP rackphone_battery_capacity_percent Charge level.\n"
+        "rackphone_battery_capacity_percent 78.0\n"
+        'rackphone_temperature_celsius{zone="battery"} 27.0\n'
+        "not valid exposition\n"
+        "rackphone_root_available NaN\n"
+        "rackphone_battery_capacity_percent 79\n"
+    )
+
+
+def test_parse_samples_keeps_only_current_summary_values(
+    real_exposition: str,
+) -> None:
+    assert parse_samples(real_exposition) == {
+        "rackphone_battery_capacity_percent": 79.0
+    }
 
 
 def test_adds_label_to_bare_sample() -> None:
