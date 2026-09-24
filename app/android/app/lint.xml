@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<lint>
+    <!-- The companion runs on the rack unit's own phone and is sideloaded
+         there by the Magisk plugin. It is never offered to a Chromebook, so
+         whether its telephony permissions would hide it from one is moot. -->
+    <issue id="PermissionImpliesUnsupportedChromeOsHardware" severity="ignore" />
+    <issue id="UnsupportedChromeOsHardware" severity="ignore" />
+</lint>

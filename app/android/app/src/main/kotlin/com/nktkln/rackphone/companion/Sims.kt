@@ -1,6 +1,11 @@
+// Nothing here throws: a missing READ_PHONE_STATE is checked through HostFiles.granted or
+// absorbed by runCatching, and reported as absent.
+@file:SuppressLint("MissingPermission")
+
 package com.nktkln.rackphone.companion
 
 import android.Manifest
+import android.annotation.SuppressLint
 import android.content.Context
 import android.os.Build
 import android.telephony.SubscriptionInfo

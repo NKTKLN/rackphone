@@ -222,7 +222,9 @@ object Sender {
             } ?: return null
 
         if (subId < 0) return base
-        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+        // createForSubscriptionId is API 31. Gating it on R made Android 11 throw
+        // here, and the fallback then sent from the default SIM without a word.
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             runCatching { base.createForSubscriptionId(subId) }.getOrDefault(base)
         } else {
             @Suppress("DEPRECATION")

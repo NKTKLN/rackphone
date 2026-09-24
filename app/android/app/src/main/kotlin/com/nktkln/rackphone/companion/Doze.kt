@@ -2,6 +2,7 @@ package com.nktkln.rackphone.companion
 
 import android.app.usage.UsageStatsManager
 import android.content.Context
+import android.os.Build
 import android.os.PowerManager
 
 /**
@@ -33,6 +34,8 @@ object Doze {
      * needs a permission; querying your own does not.
      */
     fun standbyBucket(context: Context): String {
+        // Standby buckets arrived in API 28; before them there is none to report.
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.P) return "unknown"
         val usage = context.getSystemService(UsageStatsManager::class.java)
             ?: return "unknown"
         val bucket = runCatching { usage.appStandbyBucket }.getOrNull() ?: return "unknown"
