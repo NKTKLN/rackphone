@@ -359,12 +359,32 @@ class GatewayClient
   }
 
   /// Opens the unit's authenticated channel-framed screen transport.
-  Future<ScreenSocket> screen(String unit) {
+  Future<ScreenSocket> screen(String unit) async {
     final httpScheme = _baseUrl.scheme.toLowerCase();
     final uri = _uri(
       '/api/units/${Uri.encodeComponent(unit)}/screen',
     ).replace(scheme: httpScheme == 'http' ? 'ws' : 'wss');
-    return ScreenSocket.connect(uri: uri, accessToken: _accessToken ?? '');
+    return ScreenSocket.connect(
+      uri: uri,
+      accessToken: await _liveAccessToken(),
+    );
+  }
+
+  /// An access token whose refresh session is still the live one.
+  ///
+  /// A socket that holds the unit - its screen, a call's audio - is checked
+  /// against the live refresh session, not just the token's signature. This
+  /// app has two isolates that each rotate the one refresh token, and each
+  /// rotation revokes the session the other isolate's access token names, so
+  /// a token that still passes every HTTP route can be refused here. Renewing
+  /// first costs one request on something that happens once per session.
+  Future<String> _liveAccessToken() async {
+    final provider = _refreshTokenProvider;
+    final refreshToken = provider == null ? null : await provider();
+    if (refreshToken != null && refreshToken.isNotEmpty) {
+      await _renewOnce(refreshToken);
+    }
+    return _accessToken ?? '';
   }
 
   @override
@@ -525,10 +545,11 @@ class GatewayClient
   }
 
   @override
-  Future<CallAudioSocket> callAudio(String unit) => CallAudioSocket.connect(
-    uri: callAudioUri(unit),
-    accessToken: _accessToken ?? '',
-  );
+  Future<CallAudioSocket> callAudio(String unit) async =>
+      CallAudioSocket.connect(
+        uri: callAudioUri(unit),
+        accessToken: await _liveAccessToken(),
+      );
 
   @override
   void close() {

@@ -380,6 +380,24 @@ void main() {
     ]);
   });
 
+  test('a unit socket is opened with a token from a live session', () async {
+    // The other isolate may have rotated the refresh token, revoking the
+    // session this isolate's access token names; the socket must not use it.
+    var refreshes = 0;
+    final fake = MockClient((request) async {
+      if (request.url.path == '/api/refresh') refreshes++;
+      return http.Response(jsonEncode(_tokens), 200);
+    });
+    final client = GatewayClient(
+      baseUrl: Uri.parse('http://127.0.0.1:9'),
+      httpClient: fake,
+      refreshTokenProvider: () async => 'refresh-1',
+    );
+
+    await expectLater(client.callAudio('lisa01'), throwsA(anything));
+    expect(refreshes, 1);
+  });
+
   test('dialling and keys carry their JSON bodies', () async {
     final bodies = <String, Object?>{};
     final fake = MockClient((request) async {
