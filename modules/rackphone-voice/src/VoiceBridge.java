@@ -25,7 +25,12 @@ import java.util.concurrent.atomic.AtomicBoolean;
  * Both run in the ordinary in-call mode; no setMode, no reflection, no context.
  */
 public final class VoiceBridge {
-    private static final String SOCKET_NAME = "rackphone-voice";
+    private static final String DEFAULT_SOCKET = "rackphone-voice";
+    private static final String SOCKET_FLAG = "--socket=";
+    // Who may take the call: adbd, which runs as shell and carries the host's
+    // forward, or root. Any other uid is an app on the unit that got there first.
+    private static final int ROOT_UID = 0;
+    private static final int SHELL_UID = 2000;
     private static final int DEFAULT_RATE = 48000;
 
     // The media stream lands on one of these front-ends; which one is not
@@ -52,15 +57,17 @@ public final class VoiceBridge {
             if (Looper.myLooper() == null) Looper.prepareMainLooper();
             int rate = DEFAULT_RATE;
             boolean probe = false;
+            String socketName = DEFAULT_SOCKET;
             for (String arg : args) {
                 if ("--probe".equals(arg)) probe = true;
+                else if (arg.startsWith(SOCKET_FLAG)) socketName = arg.substring(SOCKET_FLAG.length());
                 else rate = Integer.parseInt(arg);
             }
             if (probe) {
                 probe(rate);
                 return;
             }
-            run(rate);
+            run(rate, socketName);
         } catch (Throwable failure) {
             // Logs are operator-facing: keep every failure to one grep-friendly line.
             System.err.println("voice bridge: " + failure.getClass().getSimpleName() + ": "
@@ -119,7 +126,7 @@ public final class VoiceBridge {
         return new AudioTrack(attributes, format, size, AudioTrack.MODE_STREAM, 0);
     }
 
-    private static void run(int rate) throws Exception {
+    private static void run(int rate, String socketName) throws Exception {
         AudioRecord record = openDownlink(rate);
         AudioTrack track = openUplink(rate);
         LocalServerSocket server = null;
@@ -133,8 +140,8 @@ public final class VoiceBridge {
             // (rate / 50) * 2 is a 20 ms frame, always a whole number of 16-bit
             // mono samples, so no socket read ever splits a sample.
             int frameBytes = Math.max(2, (rate / 50) * 2);
-            server = new LocalServerSocket(SOCKET_NAME);
-            socket = server.accept();
+            server = new LocalServerSocket(socketName);
+            socket = acceptHost(server);
             // Announce the rate and frame size before any audio, as the screen
             // stream announces the device: a stream socket keeps no write
             // boundaries, so both ends must agree the frame size up front.
@@ -154,6 +161,23 @@ public final class VoiceBridge {
             track.release();
             // Leaving the mixer routed would feed later media into the next call.
             setMixers(false);
+        }
+    }
+
+    /**
+     * Waits for the host's connection, turning away anyone else.
+     *
+     * An abstract socket has no file permissions, so its name is all that keeps
+     * an app out, and an app that learns it could take the one accept and with
+     * it both sides of the call.
+     */
+    private static LocalSocket acceptHost(LocalServerSocket server) throws Exception {
+        while (true) {
+            LocalSocket peer = server.accept();
+            int uid = peer.getPeerCredentials().getUid();
+            if (uid == ROOT_UID || uid == SHELL_UID) return peer;
+            System.err.println("voice bridge: refused a connection from uid " + uid);
+            try { peer.close(); } catch (Exception ignored) {}
         }
     }
 

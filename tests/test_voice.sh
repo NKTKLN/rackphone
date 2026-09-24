@@ -29,7 +29,10 @@ mkdir -p "$RACKPHONE_PROC_ROOT/proc/net"
 cat > "$WORK/bin/app_process" <<EOF
 #!/bin/sh
 if [ "\${3:-}" = --probe ]; then echo ready=yes; exit 0; fi
-printf '0000: 00000002 0 00010000 1 1 0 @rackphone-voice\n' >> "$RACKPHONE_PROC_ROOT/proc/net/unix"
+for arg in "\$@"; do
+  case "\$arg" in --socket=*) NAME=\${arg#--socket=} ;; esac
+done
+printf '0000: 00000002 0 00010000 1 1 0 @%s\n' "\$NAME" >> "$RACKPHONE_PROC_ROOT/proc/net/unix"
 exec sleep 300
 EOF
 chmod +x "$WORK/bin/app_process"
@@ -41,12 +44,28 @@ assert_contains "idle is reported" "$OUT" "bridge=idle"
 assert_contains "audio path is reported ready" "$OUT" "audio=ready"
 if sh "$ACTION" stop >/dev/null 2>&1; then _ok "stop succeeds while idle"; else _bad "stop succeeds while idle" "non-zero"; fi
 
+section "Per-session socket id"
+if sh "$ACTION" start 0000BEEF >/dev/null 2>&1; then
+  _bad "a malformed socket id is refused" "start returned success"
+  sh "$ACTION" stop >/dev/null 2>&1
+else
+  _ok "a malformed socket id is refused"
+fi
+BYHAND=$(sh "$ACTION" start 2>&1)
+assert_matches "a start by hand names the socket it chose" "$BYHAND" \
+  'socket localabstract:rackphone-voice_[0-7][0-9a-f]{7}\)$'
+assert_contains "and binds that very name" "$(cat "$RACKPHONE_PROC_ROOT/proc/net/unix")" \
+  "@$(printf '%s' "$BYHAND" | sed -n 's/.*localabstract:\([^)]*\)).*/\1/p')"
+sh "$ACTION" stop >/dev/null
+
 section "Exclusive bridge"
-sh "$ACTION" start >/dev/null
+sh "$ACTION" start 0000beef >/dev/null
+assert_contains "the bridge binds the name the host chose" \
+  "$(cat "$RACKPHONE_PROC_ROOT/proc/net/unix")" "@rackphone-voice_0000beef"
 OUT=$(sh "$STATUS")
 assert_contains "active is reported" "$OUT" "bridge=active"
 assert_matches "the active PID is reported" "$OUT" '^pid=[0-9]+$'
-if SECOND=$(sh "$ACTION" start 2>&1); then
+if SECOND=$(sh "$ACTION" start 0000cafe 2>&1); then
   _bad "a second start is refused" "start returned success"
 else
   assert_contains "the refusal is loud" "$SECOND" "already running"
@@ -56,7 +75,7 @@ assert_contains "stop returns status to idle" "$(sh "$STATUS")" "bridge=idle"
 
 section "Missing dex refusal"
 rm -f "$DEX"
-if BAD=$(sh "$ACTION" start 2>&1); then
+if BAD=$(sh "$ACTION" start 0000beef 2>&1); then
   _bad "a missing dex is refused" "start returned success"
 else
   assert_contains "the missing dex is loud" "$BAD" "dex missing"
