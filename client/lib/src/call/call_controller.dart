@@ -244,6 +244,9 @@ final class CallController extends ChangeNotifier {
 
   void _onClosed(CallCloseReason reason) {
     if (_ending || _disposed) return;
+    // The socket closing after the call already ended - usually because this
+    // side closed it - must not replace the reason the call ended with.
+    if (_state == CallState.ended || _state == CallState.idle) return;
     _message = reason.kind == CallCloseKind.heldByAnotherDevice
         ? (reason.holder == null
               ? 'Call is held by another device.'
