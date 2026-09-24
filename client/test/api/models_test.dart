@@ -79,7 +79,7 @@ void main() {
         'last_login_device': 'console',
         'failed_logins_24h': 2,
         'locked_until': null,
-        'totp_enabled': true,
+        'totp': 'enabled',
       },
     });
 
@@ -141,5 +141,14 @@ void main() {
 
     expect(both.occurredAt!.millisecondsSinceEpoch, 1700000000123);
     expect(hostOnly.occurredAt!.millisecondsSinceEpoch, 1700000999000);
+  });
+
+  test('the security summary reads TOTP as the gateway words it', () {
+    SecuritySummary summary(Map<String, dynamic> totp) =>
+        SecuritySummary.fromJson({'failed_logins_24h': 0, ...totp});
+
+    expect(summary({'totp': 'enabled'}).totpEnabled, isTrue);
+    expect(summary({'totp': 'disabled'}).totpEnabled, isFalse);
+    expect(summary({}).totpEnabled, isFalse);
   });
 }

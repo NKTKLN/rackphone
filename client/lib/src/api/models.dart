@@ -328,7 +328,9 @@ class SecuritySummary {
         lastLoginDevice: _nullableString(json['last_login_device']),
         failedLogins24h: _int(json['failed_logins_24h']) ?? 0,
         lockedUntil: _int(json['locked_until']),
-        totpEnabled: json['totp_enabled'] == true,
+        // The gateway says "enabled" or "disabled"; the boolean is what an
+        // older draft of the contract used, and costs nothing to keep reading.
+        totpEnabled: json['totp'] == 'enabled' || json['totp_enabled'] == true,
       );
 
   final int? lastLoginAt;
