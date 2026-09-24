@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import asyncio
+import socket
 from typing import Any, cast
 
 import pytest
 from fastapi import WebSocket
 
+from rackphone.gateway import relay as relay_module
 from rackphone.gateway.relay import ScreenRelay
 
 
@@ -28,43 +30,36 @@ class QueueWebSocket:
         await self.outgoing.put(data)
 
 
+def _listener() -> socket.socket:
+    """Open the non-blocking loopback listener a session would hand over."""
+    try:
+        listener = socket.create_server(("127.0.0.1", 0), backlog=2)
+    except OSError as exc:
+        pytest.skip(f"loopback sockets unavailable: {exc}")
+    listener.setblocking(False)
+    return listener
+
+
 def test_relay_orders_connections_and_moves_channelled_bytes() -> None:
     """Exercise both relay directions without a device or real phone."""
 
     async def exercise() -> None:
-        connections: list[tuple[asyncio.StreamReader, asyncio.StreamWriter]] = []
-        connected = asyncio.Event()
-        finished = asyncio.Event()
-
-        async def accept(
-            reader: asyncio.StreamReader, writer: asyncio.StreamWriter
-        ) -> None:
-            connections.append((reader, writer))
-            if len(connections) == 2:
-                connected.set()
-            # Held open for this test's own reads, and released before the
-            # server is closed. Waiting on `writer.wait_closed()` here instead
-            # deadlocks: nothing closes that writer, and `server.wait_closed()`
-            # below waits for this handler to return.
-            await finished.wait()
-            writer.close()
-
-        try:
-            server = await asyncio.start_server(accept, "127.0.0.1", 0)
-        except OSError as exc:
-            pytest.skip(f"loopback sockets unavailable: {exc}")
-        address = server.sockets[0].getsockname()
-        relay = ScreenRelay("127.0.0.1", cast(int, address[1]))
-        await relay.open()
-        await connected.wait()
+        listener = _listener()
+        port = listener.getsockname()[1]
+        relay = ScreenRelay(listener)
+        opening = asyncio.create_task(relay.open())
+        # Acceptance order is the protocol identity: the server connects video
+        # first and control second, both to the same reversed port.
+        video = await asyncio.open_connection("127.0.0.1", port)
+        await asyncio.sleep(0)
+        control = await asyncio.open_connection("127.0.0.1", port)
+        await opening
         websocket = QueueWebSocket()
         pump = asyncio.create_task(relay.pump(cast(WebSocket, websocket)))
 
-        # Acceptance order is the protocol identity: first is video, second
-        # control, even though both arrive at the same forwarded port.
-        connections[0][1].write(b"picture")
-        connections[1][1].write(b"touch")
-        await asyncio.gather(connections[0][1].drain(), connections[1][1].drain())
+        video[1].write(b"picture")
+        control[1].write(b"touch")
+        await asyncio.gather(video[1].drain(), control[1].drain())
         sent = {await websocket.outgoing.get(), await websocket.outgoing.get()}
         assert sent == {b"\x00picture", b"\x01touch"}
 
@@ -75,50 +70,40 @@ def test_relay_orders_connections_and_moves_channelled_bytes() -> None:
         await websocket.incoming.put(
             {"type": "websocket.receive", "bytes": b"\x01client-control"}
         )
-        assert await connections[0][0].readexactly(12) == b"client-video"
-        assert await connections[1][0].readexactly(14) == b"client-control"
+        assert await video[0].readexactly(12) == b"client-video"
+        assert await control[0].readexactly(14) == b"client-control"
         assert not pump.done()
 
         await websocket.incoming.put({"type": "websocket.disconnect"})
         await pump
         await relay.close()
         await relay.close()
-        finished.set()
-        server.close()
-        await server.wait_closed()
+        for _reader, writer in (video, control):
+            writer.close()
+        listener.close()
 
     asyncio.run(exercise())
 
 
-def test_open_closes_video_when_control_connection_fails() -> None:
-    """A partial connection never remains open after control fails."""
+def test_open_closes_video_when_control_never_connects(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A partial connection never remains open after control fails to arrive."""
+    monkeypatch.setattr(relay_module, "ACCEPT_TIMEOUT_SECONDS", 0.2)
 
     async def exercise() -> None:
-        closed = asyncio.Event()
-
-        async def accept(
-            reader: asyncio.StreamReader, writer: asyncio.StreamWriter
-        ) -> None:
-            server.close()
-            await reader.read()
-            closed.set()
-            writer.close()
-            await writer.wait_closed()
-
-        try:
-            server = await asyncio.start_server(accept, "127.0.0.1", 0)
-        except OSError as exc:
-            pytest.skip(f"loopback sockets unavailable: {exc}")
-        address = server.sockets[0].getsockname()
-        relay = ScreenRelay("127.0.0.1", cast(int, address[1]))
-        try:
-            await relay.open()
-        except OSError:
-            pass
-        else:
-            raise AssertionError("control connection unexpectedly opened")
-        await asyncio.wait_for(closed.wait(), timeout=1)
+        listener = _listener()
+        relay = ScreenRelay(listener)
+        opening = asyncio.create_task(relay.open())
+        reader, writer = await asyncio.open_connection(
+            "127.0.0.1", listener.getsockname()[1]
+        )
+        with pytest.raises(TimeoutError):
+            await opening
+        # The video connection the relay did accept is closed, not left open.
+        assert await asyncio.wait_for(reader.read(), timeout=1) == b""
+        writer.close()
         await relay.close()
-        await server.wait_closed()
+        listener.close()
 
     asyncio.run(exercise())

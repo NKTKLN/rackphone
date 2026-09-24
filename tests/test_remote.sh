@@ -34,16 +34,12 @@ remote.turn_screen_off=1
 remote.show_touches=0
 EOF
 
-export RACKPHONE_PROC_ROOT="$WORK/proc-root"
-mkdir -p "$RACKPHONE_PROC_ROOT/proc/net"
-: > "$RACKPHONE_PROC_ROOT/proc/net/unix"
-
-# A fake Android runtime that does what the real server does in the one respect
-# start waits on: it binds its abstract socket, which here means announcing
-# itself in the prefixed /proc tree, and then stays alive.
+# A fake Android runtime: it records the options the server was given, and
+# stays alive as a started server does.
+ARGS="$WORK/server.args"
 cat > "$WORK/bin/app_process" <<EOF
 #!/bin/sh
-printf '0000: 00000002 0 00010000 1 1 0 @scrcpy\n' >> "$RACKPHONE_PROC_ROOT/proc/net/unix"
+printf '%s\n' "\$@" > "$ARGS"
 exec sleep 300
 EOF
 chmod +x "$WORK/bin/app_process"
@@ -88,12 +84,44 @@ else
   _bad "stop succeeds when no server is running" "stop returned non-zero"
 fi
 
+section "Per-session socket id"
+if BYHAND=$(sh "$ACTION" start 2>&1); then
+  _bad "a screen is not started by hand" "start returned success"
+  sh "$ACTION" stop >/dev/null 2>&1
+else
+  assert_contains "a screen is not started by hand, and says where to" "$BYHAND" "from the client"
+fi
+for bad in 1234567 80000000 0000BEEF "0000beef;id"; do
+  if sh "$ACTION" start "$bad" >/dev/null 2>&1; then
+    _bad "start refuses socket id [$bad]" "start returned success"
+    sh "$ACTION" stop >/dev/null 2>&1
+  else
+    _ok "start refuses socket id [$bad]"
+  fi
+done
+
+section "A server that dies on start"
+cp "$WORK/bin/app_process" "$WORK/app_process.keep"
+printf '#!/bin/sh\necho "ERROR: bad option" >&2\nexit 1\n' > "$WORK/bin/app_process"
+if DIED=$(sh "$ACTION" start 0000beef 2>&1); then
+  _bad "a server that exits at once is reported" "start returned success"
+  sh "$ACTION" stop >/dev/null 2>&1
+else
+  assert_contains "a server that exits at once is reported" "$DIED" "failed to start"
+fi
+assert_contains "and leaves no session behind" "$(sh "$STATUS")" "session=idle"
+cp "$WORK/app_process.keep" "$WORK/bin/app_process"
+
 section "Exclusive session"
-sh "$ACTION" start >/dev/null
+sh "$ACTION" start 0000beef >/dev/null
+assert_contains "the server is told the host's socket id" "$(cat "$ARGS")" "scid=0000beef"
+# Forward mode would have the phone listen, which is what an app could race.
+assert_not_contains "the server connects out rather than listening" \
+  "$(cat "$ARGS")" "tunnel_forward"
 OUT=$(sh "$STATUS")
 assert_contains "active is reported" "$OUT" "session=active"
 assert_matches "the active PID is reported" "$OUT" '^pid=[0-9]+$'
-if SECOND=$(sh "$ACTION" start 2>&1); then
+if SECOND=$(sh "$ACTION" start 0000cafe 2>&1); then
   _bad "a second start is refused" "start returned success"
 else
   assert_contains "the refusal gives one-line reason" "$SECOND" "already running"
@@ -103,7 +131,7 @@ assert_contains "stop returns status to idle" "$(sh "$STATUS")" "session=idle"
 
 section "Checksum refusal"
 printf '%064d  scrcpy-server.jar\n' 0 > "$SUM"
-if BAD=$(sh "$ACTION" start 2>&1); then
+if BAD=$(sh "$ACTION" start 0000beef 2>&1); then
   _bad "a checksum mismatch is refused" "start returned success"
 else
   assert_contains "the mismatch is loud" "$BAD" "checksum mismatch"

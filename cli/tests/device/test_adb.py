@@ -311,3 +311,24 @@ class TestForward:
             "--remove",
             "tcp:43123",
         ]
+
+    def test_reverse_refuses_to_take_a_name_that_is_held(
+        self, fake_subprocess: list[list[str]]
+    ) -> None:
+        """Ask adb not to rebind, so a squatter on the name is noticed."""
+        adb.reverse("AAA", "localabstract:scrcpy_0000beef", "tcp:43123")
+        adb.remove_reverse("AAA", "localabstract:scrcpy_0000beef")
+        assert fake_subprocess[0][-6:] == [
+            "-s",
+            "AAA",
+            "reverse",
+            "--no-rebind",
+            "localabstract:scrcpy_0000beef",
+            "tcp:43123",
+        ]
+        assert fake_subprocess[1][-4:] == [
+            "AAA",
+            "reverse",
+            "--remove",
+            "localabstract:scrcpy_0000beef",
+        ]

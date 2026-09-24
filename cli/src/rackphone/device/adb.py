@@ -238,16 +238,7 @@ def forward(serial: str, local: str, remote: str) -> str:
     Raises:
         AdbError: If adb cannot establish the forward.
     """
-    completed = subprocess.run(  # noqa: S603 - fixed argv, no shell involved
-        [*build_adb_command(), "-s", serial, "forward", local, remote],
-        capture_output=True,
-        text=True,
-        timeout=DEFAULT_TIMEOUT_SECONDS,
-        check=False,
-    )
-    if completed.returncode != 0:
-        raise AdbError(completed.stderr.strip() or "could not establish adb forward")
-    return completed.stdout.strip()
+    return _adb(serial, ["forward", local, remote], "adb forward")
 
 
 def remove_forward(serial: str, local: str) -> None:
@@ -260,15 +251,51 @@ def remove_forward(serial: str, local: str) -> None:
     Raises:
         AdbError: If adb cannot remove the forward.
     """
+    _adb(serial, ["forward", "--remove", local], "adb forward removal")
+
+
+def reverse(serial: str, remote: str, local: str) -> None:
+    """Pass connections to a device socket on to a host endpoint.
+
+    Args:
+        serial: Serial of the target device.
+        remote: Device endpoint adbd binds, such as ``localabstract:name``.
+        local: Host endpoint receiving each connection, such as ``tcp:43123``.
+
+    Raises:
+        AdbError: If adb cannot establish the reverse, for one because
+            something on the device already holds the name.
+    """
+    # --no-rebind: a name that is already taken is refused rather than stolen,
+    # which is what lets a squatter on it be noticed.
+    _adb(serial, ["reverse", "--no-rebind", remote, local], "adb reverse")
+
+
+def remove_reverse(serial: str, remote: str) -> None:
+    """Remove one device-to-host adb reverse.
+
+    Args:
+        serial: Serial of the target device.
+        remote: Device endpoint given to :func:`reverse`.
+
+    Raises:
+        AdbError: If adb cannot remove the reverse.
+    """
+    _adb(serial, ["reverse", "--remove", remote], "adb reverse removal")
+
+
+def _adb(serial: str, arguments: list[str], what: str) -> str:
+    """Run one host-side adb command against a device and return its stdout."""
     completed = subprocess.run(  # noqa: S603 - fixed argv, no shell involved
-        [*build_adb_command(), "-s", serial, "forward", "--remove", local],
+        [*build_adb_command(), "-s", serial, *arguments],
         capture_output=True,
         text=True,
         timeout=DEFAULT_TIMEOUT_SECONDS,
         check=False,
     )
     if completed.returncode != 0:
-        raise AdbError(completed.stderr.strip() or "could not remove adb forward")
+        raise AdbError(completed.stderr.strip() or f"{what} failed")
+    return completed.stdout.strip()
 
 
 def push_file(serial: str, local_path: str, remote_path: str) -> None:

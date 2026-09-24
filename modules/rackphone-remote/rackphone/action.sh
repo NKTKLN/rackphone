@@ -8,16 +8,21 @@ RUN="$RP_CONF/run"
 PIDFILE="$RUN/remote.pid"
 STARTFILE="$RUN/remote.started"
 LOCK="$RUN/remote.starting"
-# The abstract socket scrcpy binds, and how long to wait for it in tenths
-# of a second. Five seconds covers a cold start on a throttled phone.
-READY_SOCKET=scrcpy
-READY_TIMEOUT_DS=50
-# Prefixable like every other filesystem root in these modules, and empty in
-# production - the suite points it at a tree it controls so that what runs
-# under test is this script and not a copy of it.
-PROC=${RACKPHONE_PROC_ROOT:-}
+# How long a fresh server must stay up, in tenths of a second, before start
+# reports it running. See start for why this is not a wait for readiness.
+STARTUP_GRACE_DS=5
 JAR="$MODDIR/rackphone/scrcpy-server.jar"
 SUM="$MODDIR/rackphone/scrcpy-server.sha256"
+
+# The host names each session's socket with a fresh 31-bit id, as scrcpy's own
+# client does with scid=, and has adbd hold that name before this runs.
+valid_socket_id() {
+  case "${1:-}" in
+    [0-7][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]) return 0 ;;
+  esac
+  echo "start needs the host's 8-hex-digit socket id" >&2
+  return 1
+}
 
 running() {
   [ -f "$PIDFILE" ] || return 1
@@ -40,6 +45,14 @@ verified_hash() {
 }
 
 start() {
+  if [ -z "${1:-}" ]; then
+    # Not an oversight: the host must have adbd hold the socket name before the
+    # server starts, or an app could take it. That order is only the gateway's
+    # to keep, so a screen is opened from the client, never by hand.
+    echo "a screen session is opened by the gateway; open the screen from the client" >&2
+    return 1
+  fi
+  valid_socket_id "$1" || return 1
   mkdir -p "$RUN"
   if running; then
     echo "remote session already running (pid $(cat "$PIDFILE"))" >&2
@@ -59,36 +72,27 @@ start() {
     "video_bit_rate=$(cfg bitrate)" "max_size=$(cfg max_size)" \
     "max_fps=$(cfg max_fps)" "turn_screen_off=$([ "$(cfg turn_screen_off)" = 1 ] && echo true || echo false)" \
     "show_touches=$([ "$(cfg show_touches)" = 1 ] && echo true || echo false)" \
-    audio=false tunnel_forward=true cleanup=true \
+    "scid=$1" audio=false cleanup=true \
     >"$RUN/remote.log" 2>&1 &
   _pid=$!
   echo "$_pid" > "$PIDFILE"
   date +%s > "$STARTFILE"
-  # Wait for the thing that makes a session usable, not for a fixed second: the
-  # server announces itself by binding an abstract socket, and the host's
-  # forward has nothing to attach to until it does. A sleep would advertise a
-  # session that is merely still alive, and a slow failure would be reported as
-  # a success right up until the first frame never arrived.
+  # The server connects out to a name adbd already holds, so it binds nothing
+  # of its own to wait for: the host accepting both connections is the real
+  # readiness check, and it has its own timeout. What is caught here is a
+  # server that dies on start - an option it rejects, a device it cannot
+  # capture - so that fails with its log now, not as a connection never made.
   _waited=0
-  while [ "$_waited" -lt "$READY_TIMEOUT_DS" ]; do
+  while [ "$_waited" -lt "$STARTUP_GRACE_DS" ]; do
     if ! kill -0 "$_pid" 2>/dev/null; then
       rm -f "$PIDFILE" "$STARTFILE"
       echo "scrcpy server failed to start; see $RUN/remote.log" >&2
       return 1
     fi
-    if grep -q "$READY_SOCKET" "$PROC/proc/net/unix" 2>/dev/null; then
-      echo "remote session started (pid $_pid)"
-      return 0
-    fi
     sleep 0.1
     _waited=$((_waited + 1))
   done
-  # It is running and has not bound. Leave nothing behind: a process holding the
-  # encoder while the host believes there is no session is the worst of both.
-  kill "$_pid" 2>/dev/null || true
-  rm -f "$PIDFILE" "$STARTFILE"
-  echo "scrcpy server did not open its socket; see $RUN/remote.log" >&2
-  return 1
+  echo "remote session started (pid $_pid)"
 }
 
 stop() {
@@ -115,7 +119,7 @@ stop() {
 }
 
 case "${1:-}" in
-  start) start ;;
+  start) start "${2:-}" ;;
   stop) stop ;;
   version)
     # The digest is taken first and the exit status checked: inside a command

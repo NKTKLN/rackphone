@@ -5,16 +5,17 @@ protocol. A relay that understands the stream is a relay that can corrupt it,
 and every scrcpy version bump would then require a gateway change instead of a
 change in one client.
 
-With ``tunnel_forward=true``, scrcpy expects video to connect first and control
-second on the same forwarded port. Both streams share one WebSocket: the first
-byte of every binary message is 0 for video and 1 for control. One WebSocket is
-deliberate; a second is another thing to authenticate, time out, and leave open
-when its peer dies.
+Through an adb reverse, scrcpy connects to the gateway: video first, then
+control, both to the one listener the session opened. Both streams share one
+WebSocket: the first byte of every binary message is 0 for video and 1 for
+control. One WebSocket is deliberate; a second is another thing to
+authenticate, time out, and leave open when its peer dies.
 """
 
 from __future__ import annotations
 
 import asyncio
+import socket
 from collections.abc import Awaitable, Callable
 
 from fastapi import WebSocket, WebSocketDisconnect
@@ -22,29 +23,34 @@ from fastapi import WebSocket, WebSocketDisconnect
 VIDEO_CHANNEL = 0
 CONTROL_CHANNEL = 1
 READ_SIZE = 64 * 1024
+# How long the server may take to connect back: a cold app_process start on a
+# throttled phone, plus adb passing the connection on.
+ACCEPT_TIMEOUT_SECONDS = 10
 
 
 class ScreenRelay:
     """Move bytes without interpreting the device or client protocol."""
 
-    def __init__(self, host: str, port: int) -> None:
-        """Store the forwarded TCP endpoint.
+    def __init__(self, listener: socket.socket) -> None:
+        """Store the listener the device connects back to.
 
         Args:
-            host: Address exposing the adb forward.
-            port: Ephemeral TCP port returned by adb.
+            listener: Non-blocking socket behind the session's adb reverse.
         """
-        self.host = host
-        self.port = port
+        self.listener = listener
         self._readers: dict[int, asyncio.StreamReader] = {}
         self._writers: dict[int, asyncio.StreamWriter] = {}
 
     async def open(self) -> None:
-        """Connect video and then control, closing both after any failure."""
+        """Accept video and then control, closing both after any failure."""
         await self.close()
+        loop = asyncio.get_running_loop()
         try:
             for channel in (VIDEO_CHANNEL, CONTROL_CHANNEL):
-                reader, writer = await asyncio.open_connection(self.host, self.port)
+                connection, _ = await asyncio.wait_for(
+                    loop.sock_accept(self.listener), ACCEPT_TIMEOUT_SECONDS
+                )
+                reader, writer = await asyncio.open_connection(sock=connection)
                 self._readers[channel] = reader
                 self._writers[channel] = writer
         except BaseException:
