@@ -1,3 +1,5 @@
+import 'dart:typed_data';
+
 import 'package:flutter_test/flutter_test.dart';
 import 'package:rackphone_client/src/screen/decoder.dart';
 import 'package:rackphone_client/src/screen/protocol.dart';
@@ -50,5 +52,34 @@ void main() {
     final second = decoder.calls[1] as ConfigureDecoderCall;
     expect(first.reconfigure, isFalse);
     expect(second.reconfigure, isTrue);
+  });
+
+  test('a size Android reports after a rotation reaches Dart', () async {
+    TestWidgetsFlutterBinding.ensureInitialized();
+    const name = 'com.nktkln.rackphone.client/screen';
+    final messenger =
+        TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
+    messenger.setMockMessageHandler(
+      name,
+      (_) async => ByteData(8)..setInt64(0, 7, Endian.big),
+    );
+    addTearDown(() => messenger.setMockMessageHandler(name, null));
+    final decoder = HardwareScreenDecoder();
+    final sizes = <({int width, int height})>[];
+    decoder.sizes.listen(sizes.add);
+    await decoder.configure(portrait);
+
+    await messenger.handlePlatformMessage(
+      name,
+      ByteData(9)
+        ..setUint8(0, 4)
+        ..setUint32(1, 2400, Endian.big)
+        ..setUint32(5, 1080, Endian.big),
+      (_) {},
+    );
+    await Future<void>.delayed(Duration.zero);
+
+    expect(decoder.textureId, 7);
+    expect(sizes, [(width: 2400, height: 1080)]);
   });
 }

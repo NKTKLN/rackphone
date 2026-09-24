@@ -25,6 +25,18 @@ fun configurationAction(
         else -> ConfigurationAction.KEEP
     }
 
+/**
+ * The picture a decoder shows: its crop rectangle when it reports one (left,
+ * top, right, bottom, inclusive), else its whole buffer. Codecs pad the buffer
+ * to a multiple of 16, so the buffer alone is taller than the screen.
+ */
+fun visibleSize(width: Int, height: Int, crop: IntArray?): DecoderDimensions =
+    if (crop == null) {
+        DecoderDimensions(width, height)
+    } else {
+        DecoderDimensions(crop[2] - crop[0] + 1, crop[3] - crop[1] + 1)
+    }
+
 /** Exact comparison matters because either changed edge describes a new output surface. */
 fun dimensionsChanged(current: DecoderDimensions, announced: DecoderDimensions): Boolean =
     current.width != announced.width || current.height != announced.height
@@ -36,7 +48,16 @@ fun dimensionsChanged(current: DecoderDimensions, announced: DecoderDimensions):
  * another video package would add buffering and another lifecycle around the platform
  * decoder without doing useful demuxing work.
  */
-class ScreenDecoder(private val textures: TextureRegistry) {
+class ScreenDecoder(
+    private val textures: TextureRegistry,
+    /**
+     * Told the picture's size whenever the decoder learns a new one. scrcpy 3
+     * announces the size once, at the start; after a rotation the only word of
+     * the new one is the SPS inside the next config packet, which the codec
+     * reads and reports as an output format change.
+     */
+    private val onSize: (width: Int, height: Int) -> Unit = { _, _ -> },
+) {
     private var texture: TextureRegistry.SurfaceTextureEntry? = null
     private var surface: Surface? = null
     private var codec: MediaCodec? = null
@@ -125,9 +146,31 @@ class ScreenDecoder(private val textures: TextureRegistry) {
         val info = MediaCodec.BufferInfo()
         while (true) {
             val index = activeCodec.dequeueOutputBuffer(info, 0)
+            if (index == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED) {
+                reportSize(activeCodec.outputFormat)
+                continue
+            }
             if (index < 0) return
             activeCodec.releaseOutputBuffer(index, true)
         }
+    }
+
+    private fun reportSize(format: MediaFormat) {
+        val size = visibleSize(
+            width = format.getInteger(MediaFormat.KEY_WIDTH),
+            height = format.getInteger(MediaFormat.KEY_HEIGHT),
+            crop = if (format.containsKey(KEY_CROP_RIGHT)) {
+                intArrayOf(
+                    format.getInteger(KEY_CROP_LEFT),
+                    format.getInteger(KEY_CROP_TOP),
+                    format.getInteger(KEY_CROP_RIGHT),
+                    format.getInteger(KEY_CROP_BOTTOM),
+                )
+            } else {
+                null
+            },
+        )
+        onSize(size.width, size.height)
     }
 
     private fun releaseCodec() {
@@ -142,5 +185,12 @@ class ScreenDecoder(private val textures: TextureRegistry) {
 
     private companion object {
         const val INPUT_TIMEOUT_US = 10_000L
+
+        // MediaFormat's crop keys are public only from API 33; the strings
+        // have been the same since the codecs started reporting them.
+        const val KEY_CROP_LEFT = "crop-left"
+        const val KEY_CROP_TOP = "crop-top"
+        const val KEY_CROP_RIGHT = "crop-right"
+        const val KEY_CROP_BOTTOM = "crop-bottom"
     }
 }

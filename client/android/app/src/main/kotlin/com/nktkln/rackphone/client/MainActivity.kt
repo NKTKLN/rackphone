@@ -17,15 +17,18 @@ class MainActivity : FlutterActivity() {
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
-        val decoder = ScreenDecoder(flutterEngine.renderer)
-        screenDecoder = decoder
         // Video is roughly a megabyte per second. A MethodChannel would encode every
         // payload through StandardMessageCodec; BinaryCodec passes these bytes through.
-        BasicMessageChannel(
+        val screenChannel = BasicMessageChannel(
             flutterEngine.dartExecutor.binaryMessenger,
             CHANNEL,
             BinaryCodec.INSTANCE,
-        ).setMessageHandler { message, reply ->
+        )
+        val decoder = ScreenDecoder(flutterEngine.renderer) { width, height ->
+            screenChannel.send(sizeMessage(width, height))
+        }
+        screenDecoder = decoder
+        screenChannel.setMessageHandler { message, reply ->
             reply.reply(message?.let { dispatch(decoder, it.order(ByteOrder.BIG_ENDIAN)) })
         }
 
@@ -111,6 +114,14 @@ class MainActivity : FlutterActivity() {
         }
     }
 
+    // Not flipped, like the reply below: the length is the position.
+    private fun sizeMessage(width: Int, height: Int): ByteBuffer =
+        ByteBuffer.allocateDirect(SIZE_MESSAGE_BYTES)
+            .order(ByteOrder.BIG_ENDIAN)
+            .put(SIZE.toByte())
+            .putInt(width)
+            .putInt(height)
+
     // Not flipped: the embedding takes a binary reply's length from its
     // position, so a flipped buffer arrives in Dart as zero bytes.
     private fun textureReply(textureId: Long): ByteBuffer =
@@ -126,6 +137,10 @@ class MainActivity : FlutterActivity() {
         const val FEED = 1
         const val RESET = 2
         const val DISPOSE = 3
+
+        // From the decoder to Dart: the picture's size changed.
+        const val SIZE = 4
+        const val SIZE_MESSAGE_BYTES = 9
         const val START_AUDIO = 0
         const val PLAY_AUDIO = 1
         const val STOP_AUDIO = 2

@@ -41,7 +41,27 @@ typedef ScreenConnectionFactory = Future<ScreenConnection> Function();
 /// Turns the screen transport and decoder into state directly renderable by a
 /// page, while keeping transport failures out of framework callbacks.
 final class ScreenController extends ChangeNotifier {
-  ScreenController({required this.socketFactory, required this.decoder});
+  ScreenController({required this.socketFactory, required this.decoder}) {
+    _sizeSubscription = decoder.sizes.listen(_onSize);
+  }
+
+  StreamSubscription<({int width, int height})>? _sizeSubscription;
+
+  /// The decoder saw the picture change size - the unit rotated. Touches are
+  /// mapped through the device size, and scrcpy drops a touch whose frame of
+  /// reference does not match its screen, so this has to follow at once.
+  void _onSize(({int width, int height}) size) {
+    final device = _device;
+    if (device == null) return;
+    if (device.width == size.width && device.height == size.height) return;
+    _device = DeviceInfo(
+      name: device.name,
+      codec: device.codec,
+      width: size.width,
+      height: size.height,
+    );
+    if (!_disposed) notifyListeners();
+  }
 
   final ScreenConnectionFactory socketFactory;
   final ScreenDecoder decoder;
@@ -216,6 +236,7 @@ final class ScreenController extends ChangeNotifier {
   @override
   void dispose() {
     _disposed = true;
+    unawaited(_sizeSubscription?.cancel());
     unawaited(disconnect());
     super.dispose();
   }

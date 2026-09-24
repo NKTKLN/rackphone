@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:typed_data';
 
 import 'package:flutter/services.dart';
@@ -11,6 +12,10 @@ import 'protocol.dart';
 /// behind an interface instead of being bare platform-channel calls.
 abstract interface class ScreenDecoder {
   int? get textureId;
+
+  /// The picture's size each time the decoder learns a new one - after a
+  /// rotation, which scrcpy 3 announces only inside the next config packet.
+  Stream<({int width, int height})> get sizes;
 
   Future<void> configure(DeviceInfo device);
 
@@ -30,15 +35,36 @@ final class HardwareScreenDecoder implements ScreenDecoder {
           );
 
   final BasicMessageChannel<ByteData?> _channel;
+  final StreamController<({int width, int height})> _sizes =
+      StreamController<({int width, int height})>.broadcast();
   DeviceInfo? _device;
 
   @override
   int? textureId;
 
   @override
+  Stream<({int width, int height})> get sizes => _sizes.stream;
+
+  // The one message Android sends unasked: see MainActivity.sizeMessage.
+  static const int _sizeMessage = 4;
+
+  Future<ByteData?> _receive(ByteData? message) async {
+    if (message != null &&
+        message.lengthInBytes >= 9 &&
+        message.getUint8(0) == _sizeMessage) {
+      _sizes.add((
+        width: message.getUint32(1, Endian.big),
+        height: message.getUint32(5, Endian.big),
+      ));
+    }
+    return null;
+  }
+
+  @override
   Future<void> configure(DeviceInfo device) async {
     final current = _device;
     if (current == null) {
+      _channel.setMessageHandler(_receive);
       final reply = await _channel.send(_dimensionsMessage(0, device));
       if (reply == null || reply.lengthInBytes < 8) {
         throw StateError('Android did not return a screen texture id');
@@ -69,6 +95,7 @@ final class HardwareScreenDecoder implements ScreenDecoder {
   Future<void> dispose() async {
     if (_device == null && textureId == null) return;
     await _channel.send(ByteData(1)..setUint8(0, 3));
+    _channel.setMessageHandler(null);
     _device = null;
     textureId = null;
   }
@@ -107,10 +134,19 @@ final class FakeScreenDecoder implements ScreenDecoder {
 
   final int configuredTextureId;
   final List<ScreenDecoderCall> calls = <ScreenDecoderCall>[];
+  final StreamController<({int width, int height})> _sizes =
+      StreamController<({int width, int height})>.broadcast(sync: true);
   DeviceInfo? _device;
 
   @override
   int? textureId;
+
+  @override
+  Stream<({int width, int height})> get sizes => _sizes.stream;
+
+  /// Plays the codec finding a new picture size, as after a rotation.
+  void reportSize(int width, int height) =>
+      _sizes.add((width: width, height: height));
 
   @override
   Future<void> configure(DeviceInfo device) async {

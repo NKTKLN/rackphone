@@ -87,6 +87,29 @@ void main() {
     },
   );
 
+  test('a rotation the decoder reports remaps touches at once', () async {
+    final connection = _FakeConnection();
+    final decoder = FakeScreenDecoder();
+    final controller = ScreenController(
+      socketFactory: () async => connection,
+      decoder: decoder,
+    );
+    await controller.connect();
+    connection.devices.add(_device);
+    await _flush();
+
+    decoder.reportSize(_device.height, _device.width);
+
+    expect(controller.device!.width, _device.height);
+    expect(controller.device!.height, _device.width);
+    controller.sendTouch(0, Offset.zero, const Size(100, 200));
+    final touch = ByteData.sublistView(
+      Uint8List.fromList(connection.sent.last),
+    );
+    expect(touch.getUint16(18), _device.height, reason: 'screen width');
+    expect(touch.getUint16(20), _device.width, reason: 'screen height');
+  });
+
   test('disconnect closes transport and decoder only once', () async {
     final connection = _FakeConnection();
     final decoder = FakeScreenDecoder();

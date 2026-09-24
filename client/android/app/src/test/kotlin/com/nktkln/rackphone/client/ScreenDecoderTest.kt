@@ -23,4 +23,11 @@ class ScreenDecoderTest {
         assertTrue(dimensionsChanged(portrait, DecoderDimensions(1080, 2399)))
         assertFalse(dimensionsChanged(portrait, DecoderDimensions(1080, 2400)))
     }
+
+    @Test
+    fun `the crop rectangle, not the padded buffer, is the picture`() {
+        assertEquals(DecoderDimensions(1080, 488), visibleSize(1088, 496, intArrayOf(0, 0, 1079, 487)))
+        assertEquals(DecoderDimensions(488, 1080), visibleSize(488, 1080, null))
+    }
 }
+
