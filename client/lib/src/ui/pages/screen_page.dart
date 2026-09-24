@@ -180,6 +180,11 @@ class _ScreenPageState extends State<ScreenPage> {
               child: ScreenSurface(controller: controller),
             ),
           ),
+          // Clear of the action button, which floats over this row's end.
+          Padding(
+            padding: const EdgeInsets.only(right: 72),
+            child: _DeviceKeys(controller: controller),
+          ),
           _NavigationKeys(controller: controller),
         ],
       ),
@@ -231,6 +236,45 @@ class ScreenSurface extends StatelessWidget {
           ),
         ),
       ),
+    );
+  }
+}
+
+/// The unit's hardware keys: power, its panel, and its volume.
+class _DeviceKeys extends StatelessWidget {
+  const _DeviceKeys({required this.controller});
+
+  final ScreenController controller;
+
+  @override
+  Widget build(BuildContext context) {
+    final color = Theme.of(context).colorScheme.onSurfaceVariant;
+    final live = controller.state == ScreenState.live;
+    Widget key(IconData icon, String label, int keycode) => IconButton(
+      tooltip: label,
+      color: color,
+      onPressed: live ? () => controller.pressKey(keycode) : null,
+      icon: Icon(icon),
+    );
+    final lit = controller.displayOn;
+    return Row(
+      mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+      children: <Widget>[
+        key(Icons.power_settings_new, 'Power', AndroidKey.power),
+        IconButton(
+          // The unit's own panel, not the mirror: dark in the rack, still
+          // streaming here.
+          tooltip: lit ? 'Turn unit display off' : 'Turn unit display on',
+          color: color,
+          onPressed: live ? () => controller.setDisplayPower(on: !lit) : null,
+          icon: Icon(
+            lit ? Icons.light_mode_outlined : Icons.dark_mode_outlined,
+          ),
+        ),
+        key(Icons.volume_down, 'Volume down', AndroidKey.volumeDown),
+        key(Icons.volume_up, 'Volume up', AndroidKey.volumeUp),
+        key(Icons.volume_off_outlined, 'Mute', AndroidKey.volumeMute),
+      ],
     );
   }
 }

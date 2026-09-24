@@ -189,6 +189,18 @@ final class ScreenController extends ChangeNotifier {
   /// Turns the device a quarter, as scrcpy's own rotate shortcut does.
   void rotate() => _send(encodeRotateDevice());
 
+  /// Whether the unit's own panel is lit; the mirror streams either way.
+  bool get displayOn => _displayOn;
+  bool _displayOn = true;
+
+  /// Lights or darkens the unit's panel without ending the mirror.
+  void setDisplayPower({required bool on}) {
+    if (_connection == null || _state != ScreenState.live) return;
+    _send(encodeSetDisplayPower(on: on));
+    _displayOn = on;
+    notifyListeners();
+  }
+
   void _send(List<int> message) {
     final connection = _connection;
     if (connection == null || _state != ScreenState.live) return;

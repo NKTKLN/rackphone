@@ -120,6 +120,12 @@ void main() {
         .firstWhere((line) => line.startsWith('SCRCPY_VERSION='));
     expect(declared, 'SCRCPY_VERSION=$scrcpyProtocolVersion');
   });
+
+  test('display power is a type byte and one boolean', () {
+    expect(encodeSetDisplayPower(on: false), [10, 0]);
+    expect(encodeSetDisplayPower(on: true), [10, 1]);
+    expect(encodeRotateDevice(), [11]);
+  });
 }
 
 List<int> _introduction(String name, String codec, int width, int height) {

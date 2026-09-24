@@ -87,6 +87,34 @@ void main() {
     },
   );
 
+  test('hardware keys press and release, and the panel toggles', () async {
+    final connection = _FakeConnection();
+    final controller = ScreenController(
+      socketFactory: () async => connection,
+      decoder: FakeScreenDecoder(),
+    );
+    await controller.connect();
+    connection.devices.add(_device);
+    await _flush();
+
+    controller.pressKey(AndroidKey.volumeUp);
+    expect(connection.sent, hasLength(2));
+    expect(connection.sent.map((m) => m[1]), [0, 1], reason: 'down, then up');
+    expect(
+      connection.sent.map(
+        (m) => ByteData.sublistView(Uint8List.fromList(m)).getUint32(2),
+      ),
+      [AndroidKey.volumeUp, AndroidKey.volumeUp],
+    );
+
+    expect(controller.displayOn, isTrue);
+    controller.setDisplayPower(on: false);
+    expect(connection.sent.last, [10, 0]);
+    expect(controller.displayOn, isFalse);
+    controller.setDisplayPower(on: true);
+    expect(connection.sent.last, [10, 1]);
+  });
+
   test('a rotation the decoder reports remaps touches at once', () async {
     final connection = _FakeConnection();
     final decoder = FakeScreenDecoder();
@@ -108,6 +136,21 @@ void main() {
     );
     expect(touch.getUint16(18), _device.height, reason: 'screen width');
     expect(touch.getUint16(20), _device.width, reason: 'screen height');
+  });
+
+  test('nothing is sent before the screen is live', () async {
+    final connection = _FakeConnection();
+    final controller = ScreenController(
+      socketFactory: () async => connection,
+      decoder: FakeScreenDecoder(),
+    );
+    await controller.connect();
+
+    controller.pressKey(AndroidKey.power);
+    controller.setDisplayPower(on: false);
+
+    expect(connection.sent, isEmpty);
+    expect(controller.displayOn, isTrue);
   });
 
   test('disconnect closes transport and decoder only once', () async {

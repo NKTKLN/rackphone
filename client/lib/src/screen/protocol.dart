@@ -182,10 +182,20 @@ List<int> encodeKeyEvent({
 /// Encodes scrcpy's rotate-device request, a type byte and nothing else.
 List<int> encodeRotateDevice() => const <int>[11];
 
-/// Android keycodes for the navigation keys under the mirrored screen.
+/// Encodes scrcpy's display-power request: the unit's panel on or off.
+///
+/// Only the panel: the unit stays awake and the mirror keeps streaming, so a
+/// racked phone can be worked on without lighting up in the rack.
+List<int> encodeSetDisplayPower({required bool on}) => <int>[10, on ? 1 : 0];
+
+/// Android keycodes for the keys under the mirrored screen.
 abstract final class AndroidKey {
   static const int home = 3;
   static const int back = 4;
+  static const int volumeUp = 24;
+  static const int volumeDown = 25;
+  static const int power = 26;
+  static const int volumeMute = 164;
   static const int appSwitch = 187;
 }
 
