@@ -25,6 +25,11 @@ final class HardwareCallAudio implements CallAudio {
           );
 
   final BasicMessageChannel<ByteData?> _channel;
+
+  // The native side's reply byte: see CallAudio.kt.
+  static const int _deniedReply = 0;
+  static const int _startedReply = 1;
+  static const int _unavailableReply = 2;
   final StreamController<Uint8List> _uplink =
       StreamController<Uint8List>.broadcast();
   bool _started = false;
@@ -53,9 +58,17 @@ final class HardwareCallAudio implements CallAudio {
       ..setUint32(1, format.sampleRate, Endian.big)
       ..setUint32(5, format.frameBytes, Endian.big);
     final reply = await _channel.send(message);
-    if (reply == null || reply.lengthInBytes == 0 || reply.getUint8(0) != 1) {
+    final outcome = reply == null || reply.lengthInBytes == 0
+        ? _unavailableReply
+        : reply.getUint8(0);
+    if (outcome != _startedReply) {
       _channel.setMessageHandler(null);
-      throw StateError('Microphone permission was denied');
+      throw StateError(
+        outcome == _deniedReply
+            ? 'Microphone permission was denied'
+            : 'The microphone could not be opened. Another call or app may '
+                  'be using it.',
+      );
     }
     _started = true;
   }

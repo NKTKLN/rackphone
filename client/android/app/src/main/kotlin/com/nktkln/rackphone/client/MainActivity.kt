@@ -111,11 +111,12 @@ class MainActivity : FlutterActivity() {
         }
     }
 
+    // Not flipped: the embedding takes a binary reply's length from its
+    // position, so a flipped buffer arrives in Dart as zero bytes.
     private fun textureReply(textureId: Long): ByteBuffer =
         ByteBuffer.allocateDirect(Long.SIZE_BYTES)
             .order(ByteOrder.BIG_ENDIAN)
             .putLong(textureId)
-            .also { it.flip() }
 
     private companion object {
         const val CHANNEL = "com.nktkln.rackphone.client/screen"

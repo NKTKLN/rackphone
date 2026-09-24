@@ -11,6 +11,7 @@ import android.media.AudioTrack
 import android.media.MediaRecorder
 import android.os.Handler
 import android.os.Looper
+import android.util.Log
 import io.flutter.plugin.common.BasicMessageChannel
 import java.nio.ByteBuffer
 import java.util.concurrent.Executors
@@ -43,8 +44,7 @@ class CallAudio(
             activity.requestPermissions(arrayOf(Manifest.permission.RECORD_AUDIO), PERMISSION_REQUEST)
             return
         }
-        create(sampleRate, frameBytes)
-        reply.reply(status(true))
+        reply.reply(startedStatus(sampleRate, frameBytes))
     }
 
     fun onRequestPermissionsResult(requestCode: Int, grantResults: IntArray): Boolean {
@@ -52,8 +52,9 @@ class CallAudio(
         val request = pending ?: return true
         pending = null
         val granted = grantResults.firstOrNull() == PackageManager.PERMISSION_GRANTED
-        if (granted) create(request.sampleRate, request.frameBytes)
-        request.reply.reply(status(granted))
+        request.reply.reply(
+            if (granted) startedStatus(request.sampleRate, request.frameBytes) else status(DENIED),
+        )
         return true
     }
 
@@ -141,7 +142,7 @@ class CallAudio(
                 // Platform-channel sends must run on the main thread, not this
                 // capture loop; copy the frame out before handing it over.
                 val outgoing = frame.copyOf()
-                main.post { channel.send(ByteBuffer.wrap(outgoing)) }
+                main.post { channel.send(outgoingFrame(outgoing)) }
                 filled = 0
             }
         }
@@ -155,10 +156,35 @@ class CallAudio(
         }
     }
 
-    private fun status(ok: Boolean): ByteBuffer =
-        ByteBuffer.allocateDirect(1).put((if (ok) 1 else 0).toByte()).also { it.flip() }
+    /**
+     * Opens the audio and says how that went. A microphone another call or app
+     * is holding fails here, with the permission granted, and has to read as
+     * that rather than as a refused permission.
+     */
+    private fun startedStatus(sampleRate: Int, frameBytes: Int): ByteBuffer =
+        try {
+            create(sampleRate, frameBytes)
+            status(STARTED)
+        } catch (failure: RuntimeException) {
+            Log.w(TAG, "call audio could not start", failure)
+            dispose()
+            status(UNAVAILABLE)
+        }
+
+    // Neither is flipped: the embedding takes a binary message's length from
+    // its position, so a flipped or merely wrapped buffer arrives as nothing.
+    private fun status(code: Int): ByteBuffer = ByteBuffer.allocateDirect(1).put(code.toByte())
+
+    private fun outgoingFrame(frame: ByteArray): ByteBuffer =
+        ByteBuffer.allocateDirect(frame.size).put(frame)
 
     companion object {
         const val PERMISSION_REQUEST = 8174
+        private const val TAG = "RackphoneCallAudio"
+
+        // The reply byte the Dart side reads; see HardwareCallAudio.start.
+        private const val DENIED = 0
+        private const val STARTED = 1
+        private const val UNAVAILABLE = 2
     }
 }
