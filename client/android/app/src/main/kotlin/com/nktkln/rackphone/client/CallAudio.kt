@@ -1,6 +1,7 @@
 package com.nktkln.rackphone.client
 
 import android.Manifest
+import android.annotation.SuppressLint
 import android.app.Activity
 import android.content.pm.PackageManager
 import android.media.AudioAttributes
@@ -77,6 +78,9 @@ class CallAudio(
         executor.shutdownNow()
     }
 
+    // Reached only with RECORD_AUDIO granted: start checks it, and the permission
+    // result calls this only on a grant. Lint cannot follow either across calls.
+    @SuppressLint("MissingPermission")
     private fun create(sampleRate: Int, frameBytes: Int) {
         dispose()
         val format = AudioFormat.Builder()

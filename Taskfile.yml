@@ -179,11 +179,17 @@ tasks:
       - flutter pub get
 
   app-lint:
-    desc: Analyse and format-check the companion app
+    desc: Analyse and format-check the companion app, Dart and Kotlin
     dir: '{{.APP_DIR}}'
     cmds:
       - dart format --output=none --set-exit-if-changed .
       - flutter analyze
+      # flutter analyze never reads the Kotlin. Android lint is what catches a
+      # call to an API newer than minSdk, which compiles and then crashes on
+      # an older phone. Flutter does not track the Gradle wrapper, so
+      # regenerate it first.
+      - flutter build apk --config-only
+      - android/gradlew -p android :app:lintDebug
 
   app-test:
     desc: Run the companion app's Dart tests
@@ -212,11 +218,17 @@ tasks:
       - flutter pub get
 
   client-lint:
-    desc: Analyse and format-check the client app
+    desc: Analyse and format-check the client app, Dart and Kotlin
     dir: '{{.CLIENT_DIR}}'
     cmds:
       - dart format --output=none --set-exit-if-changed .
       - flutter analyze
+      # flutter analyze never reads the Kotlin. Android lint is what catches a
+      # call to an API newer than minSdk, which compiles and then crashes on
+      # an older phone. Flutter does not track the Gradle wrapper, so
+      # regenerate it first.
+      - flutter build apk --config-only
+      - android/gradlew -p android :app:lintDebug
 
   client-test:
     desc: Run the client app's Dart tests
@@ -243,6 +255,7 @@ tasks:
       - adb shell pm grant com.nktkln.rackphone.companion android.permission.READ_PHONE_NUMBERS
       - adb shell pm grant com.nktkln.rackphone.companion android.permission.CALL_PHONE
       - adb shell pm grant com.nktkln.rackphone.companion android.permission.ANSWER_PHONE_CALLS
+      - adb shell pm grant com.nktkln.rackphone.companion android.permission.READ_CONTACTS
       # Without these two the system defers the app's alarms by up to a year:
       # a rack unit is never opened, which is the profile Android treats as
       # abandoned. Both are settable from the host, so no tap is involved.
