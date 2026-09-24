@@ -97,6 +97,12 @@ object ActiveCall {
 
     fun tracked(of: Call): Tracked? = calls[of]
 
+    /** The number of a call ringing in, once Telecom has handed it over. */
+    @Suppress("DEPRECATION")
+    fun ringingNumber(): String? =
+        calls.keys.firstOrNull { it.state == Call.STATE_RINGING }
+            ?.details?.handle?.schemeSpecificPart
+
     fun detach(removed: Call) {
         calls.remove(removed)
     }

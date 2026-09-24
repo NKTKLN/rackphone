@@ -15,6 +15,18 @@ enum class CallState { IDLE, RINGING, OFFHOOK }
 fun shouldRecordRinging(wasRinging: Boolean, state: CallState): Boolean =
     !wasRinging && state == CallState.RINGING
 
+/**
+ * Whether a repeat of ringing finally names the caller.
+ *
+ * Android sends PHONE_STATE twice for one ringing call: once to everyone,
+ * without the number, and once to holders of READ_CALL_LOG, with it. They can
+ * arrive in either order, so the first one seen may be the blank one.
+ */
+fun namesCallerLate(wasRinging: Boolean, recorded: String, number: String?): Boolean =
+    wasRinging && recorded == UNKNOWN_CALLER && !number.isNullOrEmpty()
+
+const val UNKNOWN_CALLER = "unknown"
+
 /** Preserve a new call's id until its outcome; an existing id always wins. */
 fun correlatedCallId(existing: String, generated: String): String =
     existing.ifEmpty { generated }
@@ -63,8 +75,19 @@ class CallReceiver : BroadcastReceiver() {
         // hides it. "unknown" keeps the event - that a call came in at all is
         // the part worth relaying.
         val wasRinging = config.ringingFrom.isNotEmpty()
-        val from = Numbers.sanitise(number) ?: UNKNOWN_CALLER
+        val from = Numbers.sanitise(number)
+            ?: Numbers.sanitise(ActiveCall.ringingNumber().orEmpty())
+            ?: UNKNOWN_CALLER
         val now = System.currentTimeMillis()
+        if (namesCallerLate(wasRinging, config.ringingFrom, from.takeIf { it != UNKNOWN_CALLER })) {
+            // The call was reported without a number; say who it is now, under
+            // the same call id, so the client can put a name on the screen and
+            // the outcome is logged against the right number.
+            config.ringingFrom = from
+            writeCurrentCall(context, from)
+            recordRinging(context, from, config.ringingSinceMs, callId(context))
+            return
+        }
         if (!shouldRecordRinging(wasRinging, CallState.RINGING)) return
 
         val callId = correlatedCallId(callId(context), UUID.randomUUID().toString().take(12))
@@ -73,13 +96,16 @@ class CallReceiver : BroadcastReceiver() {
         config.ringingSinceMs = now
         config.callAnsweredMs = 0L
         writeCurrentCall(context, from)
+        recordRinging(context, from, now, callId)
+    }
 
+    private fun recordRinging(context: Context, from: String, since: Long, callId: String) {
         Inbox.record(
             context,
             JSONObject()
                 .put("kind", "call")
                 .put("address", if (from == UNKNOWN_CALLER) "" else from)
-                .put("ts", now)
+                .put("ts", since)
                 .put("direction", "ringing")
                 .put("call_id", callId),
         )
@@ -113,7 +139,6 @@ class CallReceiver : BroadcastReceiver() {
     }
 
     private companion object {
-        const val UNKNOWN_CALLER = "unknown"
         const val PREFS = "rackphone"
         const val KEY_CALL_ID = "ringing_call_id"
         const val CURRENT_CALL = "current-call.env"

@@ -36,4 +36,13 @@ class CallControlTest {
         assertFalse(isDtmfDigits("12a"))
         assertFalse(isDtmfDigits("1".repeat(33)))
     }
+
+    @Test
+    fun `only a blank ringing later given a number is named again`() {
+        assertTrue(namesCallerLate(true, UNKNOWN_CALLER, "+79001234567"))
+        assertFalse(namesCallerLate(false, UNKNOWN_CALLER, "+79001234567"))
+        assertFalse(namesCallerLate(true, "+79001234567", "+79001234567"))
+        assertFalse(namesCallerLate(true, UNKNOWN_CALLER, ""))
+        assertFalse(namesCallerLate(true, UNKNOWN_CALLER, null))
+    }
 }
