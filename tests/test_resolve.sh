@@ -111,4 +111,19 @@ python3 -c "import json,sys; json.load(open('$WORK/schema.json'))" 2>/dev/null |
   fi
 }
 
+section "Action arguments"
+# The gateway sends a message as `action companion send <to> <body>`. A
+# dispatcher that took only the id refused every send with a usage line.
+cat > "$RACKPHONE_MODULES_DIR/rackphone-demo/rackphone/action.sh" <<'SH'
+for arg in "$@"; do printf '[%s]\n' "$arg"; done
+SH
+OUT=$(sh "$RP" action demo send "+7 900" "two words" 2>&1)
+assert_eq "arguments reach the action one argv each" "$OUT" "$(printf '[send]\n[+7 900]\n[two words]')"
+assert_eq "a bare action id still works" "$(sh "$RP" action demo start 2>&1)" "[start]"
+if sh "$RP" action demo >/dev/null 2>&1; then
+  _bad "an action without an id is refused" "returned success"
+else
+  _ok "an action without an id is refused"
+fi
+
 summary
