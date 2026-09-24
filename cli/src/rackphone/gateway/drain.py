@@ -141,6 +141,10 @@ class MessageGateway:
         if self.forwarder is None or not self.config.ntfy.is_configured:
             return
         for event in events:
+            if event.direction == "out":
+                # The operator placed it from a client, so a push would only
+                # announce their own action back to them.
+                continue
             push, rule = should_push(event, self.config.filters)
             if not push and rule is not None:
                 # Suppressed, not dropped: the event is already committed and

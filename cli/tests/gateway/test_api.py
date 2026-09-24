@@ -9,7 +9,6 @@ from __future__ import annotations
 import asyncio
 import json
 import socket
-import threading
 import time
 from collections.abc import AsyncGenerator, Iterator
 from contextlib import contextmanager
@@ -27,6 +26,7 @@ from rackphone.gateway.api import client_ip, create_app, iter_new_events
 from rackphone.gateway.auth import SCOPE_CONTROL, SCOPE_READ, hash_password
 from rackphone.gateway.authstore import AuthStore
 from rackphone.gateway.config import AdminConfig, GatewayConfig, NtfyConfig
+from rackphone.gateway.contacts import ContactBook, ContactsError
 from rackphone.gateway.drain import MessageGateway
 from rackphone.gateway.login import LoginService
 from rackphone.gateway.presence import ClientPresence
@@ -39,6 +39,7 @@ HTTP_FORBIDDEN = 403
 HTTP_LOCKED = 423
 HTTP_BAD_REQUEST = 400
 HTTP_WEBSOCKET_POLICY = 1008
+HTTP_WEBSOCKET_NORMAL = 1000
 HTTP_NOT_FOUND = 404
 HTTP_BAD_GATEWAY = 502
 HTTP_CONFLICT = 409
@@ -116,6 +117,66 @@ class TestQueries:
         )
 
 
+class TestContacts:
+    def _client(
+        self,
+        store: EventStore,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        book: ContactBook,
+        capabilities: str = "sms",
+    ) -> TestClient:
+        monkeypatch.setattr(
+            api.units,
+            "load_all_units",
+            lambda: [api.units.Unit("lisa01", tmp_path / "unit")],
+        )
+        config = GatewayConfig(
+            api_token="legacy",
+            unit_capabilities={"lisa01": frozenset({capabilities})},
+        )
+        auth_store = AuthStore(tmp_path / "auth.db")
+        client = TestClient(
+            create_app(config, store, LoginService(config, auth_store), contacts=book)
+        )
+        client.headers["Authorization"] = "Bearer legacy"
+        return client
+
+    def test_lists_the_unit_address_book(
+        self, store: EventStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        book = ContactBook(
+            reader=lambda _unit: [
+                {"name": "Andrew", "number": "+7900", "normalized": "+7900"}
+            ]
+        )
+        with self._client(store, tmp_path, monkeypatch, book) as client:
+            rows = client.get("/api/units/lisa01/contacts").json()
+        assert rows == [{"name": "Andrew", "number": "+7900", "normalized": "+7900"}]
+
+    def test_needs_the_sms_capability(
+        self, store: EventStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        book = ContactBook(reader=lambda _unit: pytest.fail("read"))
+        with self._client(
+            store, tmp_path, monkeypatch, book, capabilities="notifications"
+        ) as client:
+            response = client.get("/api/units/lisa01/contacts")
+        assert response.status_code == HTTP_FORBIDDEN
+
+    def test_a_refusing_unit_is_a_bad_gateway(
+        self, store: EventStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        def refuse(_unit: str) -> list[dict[str, object]]:
+            raise ContactsError("permission_denied")
+
+        with self._client(
+            store, tmp_path, monkeypatch, ContactBook(reader=refuse)
+        ) as client:
+            response = client.get("/api/units/lisa01/contacts")
+        assert response.status_code == HTTP_BAD_GATEWAY
+
+
 class TestSending:
     def test_send_returns_device_answer_and_audits_no_body(
         self,
@@ -146,11 +207,19 @@ class TestSending:
                 headers={"Authorization": "Bearer legacy"},
             )
         assert response.status_code == HTTP_OK
-        assert response.json() == {"accepted": True, "id": "out-1"}
+        answer = response.json()
+        assert answer["accepted"] is True
+        assert answer["id"] == "out-1"
+        assert answer["event"]["direction"] == "out"
+        assert answer["event"]["address"] == "+7900"
         audit = auth_store.query_audit()
         assert audit[0]["subject"] == "lisa01"
         assert "+7900" in audit[0]["detail"]
         assert secret_body not in repr(audit)
+        # The message itself belongs with the others, so a conversation shows
+        # both sides; it is the audit log that must not hold it.
+        sent = populated_store.query_events(kind="sms", unit="lisa01")[0]
+        assert (sent["body"], sent["direction"]) == (secret_body, "out")
         auth_store.close()
 
     def test_unknown_unit_is_not_found(
@@ -512,6 +581,76 @@ def test_units_are_listed_with_their_capabilities(
     auth_store.close()
 
 
+class TestCallControl:
+    @pytest.fixture
+    def calls_client(
+        self,
+        populated_store: EventStore,
+        tmp_path: Path,
+        repo: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> Iterator[tuple[TestClient, AuthStore]]:
+        (repo / "units" / "lisa01.env").write_text("")
+        monkeypatch.setattr(
+            api, "dial_call", lambda _unit, to: {"status": "dialing", "to": to}
+        )
+        monkeypatch.setattr(api, "end_call", lambda _unit: {"status": "ended"})
+        monkeypatch.setattr(api, "send_dtmf", lambda *_args: {"status": "sent"})
+        config = GatewayConfig(api_token="legacy")
+        auth_store = AuthStore(tmp_path / "auth.db")
+        with TestClient(
+            create_app(config, populated_store, LoginService(config, auth_store))
+        ) as client:
+            client.headers["Authorization"] = "Bearer legacy"
+            yield client, auth_store
+        auth_store.close()
+
+    def test_dialling_is_audited_with_its_target(
+        self, calls_client: tuple[TestClient, AuthStore]
+    ) -> None:
+        client, auth_store = calls_client
+        response = client.post("/api/units/lisa01/call/dial", json={"to": "+7900"})
+        assert response.json() == {"status": "dialing", "to": "+7900"}
+        audit = auth_store.query_audit()
+        assert audit[0]["action"] == "dial_call"
+        assert "+7900" in audit[0]["detail"]
+
+    def test_ending_is_audited(
+        self, calls_client: tuple[TestClient, AuthStore]
+    ) -> None:
+        client, auth_store = calls_client
+        assert client.post("/api/units/lisa01/call/end").json() == {"status": "ended"}
+        assert auth_store.query_audit()[0]["action"] == "end_call"
+
+    def test_keys_are_never_audited(
+        self, calls_client: tuple[TestClient, AuthStore]
+    ) -> None:
+        # Keys pressed into a bank's menu can be a PIN.
+        client, auth_store = calls_client
+        response = client.post("/api/units/lisa01/call/dtmf", json={"digits": "4821"})
+        assert response.json() == {"status": "sent"}
+        assert "4821" not in repr(auth_store.query_audit())
+
+    def test_a_unit_without_calls_cannot_dial(
+        self, populated_store: EventStore, tmp_path: Path, repo: Path
+    ) -> None:
+        (repo / "units" / "lisa01.env").write_text("")
+        config = GatewayConfig(
+            api_token="legacy", unit_capabilities={"lisa01": frozenset({"sms"})}
+        )
+        auth_store = AuthStore(tmp_path / "auth.db")
+        with TestClient(
+            create_app(config, populated_store, LoginService(config, auth_store))
+        ) as client:
+            response = client.post(
+                "/api/units/lisa01/call/dial",
+                json={"to": "+7900"},
+                headers={"Authorization": "Bearer legacy"},
+            )
+        assert response.status_code == HTTP_FORBIDDEN
+        auth_store.close()
+
+
 class TestTelemetry:
     def test_collects_a_known_unit(
         self,
@@ -644,35 +783,30 @@ def test_health_stays_open_so_a_probe_still_works(
 
 
 @contextmanager
-def fake_forwarded_device() -> Iterator[int]:
-    """Serve a port that accepts the relay's two connections and says nothing."""
-    listener = socket.socket()
-    listener.bind(("127.0.0.1", 0))
-    listener.listen(4)
-    accepted: list[socket.socket] = []
-    stop = threading.Event()
+def fake_reversed_device(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+    """Stand in for a phone whose server connects back through the reverse."""
+    connected: list[socket.socket] = []
 
-    def serve() -> None:
-        listener.settimeout(0.2)
-        while not stop.is_set():
-            try:
-                connection, _ = listener.accept()
-            except TimeoutError:
-                continue
-            except OSError:
-                return
-            accepted.append(connection)
+    def reverse(_serial: str, _remote: str, local: str) -> None:
+        # The listener exists before the reverse, so connecting here, before
+        # the relay accepts, is what a real server's early start looks like.
+        port = int(local.removeprefix("tcp:"))
+        for _channel in ("video", "control"):
+            connected.append(socket.create_connection(("127.0.0.1", port)))
 
-    worker = threading.Thread(target=serve, daemon=True)
-    worker.start()
+    monkeypatch.setattr(adb, "reverse", reverse)
+    monkeypatch.setattr(adb, "remove_reverse", lambda *_a: None)
     try:
-        yield listener.getsockname()[1]
+        yield
     finally:
-        stop.set()
-        worker.join(timeout=2)
-        for connection in accepted:
+        for connection in connected:
             connection.close()
-        listener.close()
+
+
+def no_reverse(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Accept reverse setup and teardown for routes that never relay."""
+    monkeypatch.setattr(adb, "reverse", lambda *_a: None)
+    monkeypatch.setattr(adb, "remove_reverse", lambda *_a: None)
 
 
 def screen_app(
@@ -698,12 +832,10 @@ def test_the_screen_socket_owns_its_session(
     # A session that outlives its socket leaves an encoder running on a phone
     # nobody is watching, which is invisible until the unit gets hot.
     manager = SessionManager(clock=lambda: 1000)
-    with fake_forwarded_device() as port:
+    with fake_reversed_device(monkeypatch):
         monkeypatch.setattr(api.time, "time", lambda: 1000)
         monkeypatch.setattr(adb, "resolve_serial", lambda serial: serial or "AAA")
         monkeypatch.setattr(adb, "run_device_cli", lambda *_a, **_k: "")
-        monkeypatch.setattr(adb, "forward", lambda *_a: str(port))
-        monkeypatch.setattr(adb, "remove_forward", lambda *_a: None)
         app, login, auth_store = screen_app(populated_store, tmp_path, repo, manager)
         granted = login.log_in("admin", "right", "peer", "tablet", 1000)
         other = login.log_in("admin", "right", "peer", "laptop", 1000)
@@ -748,6 +880,51 @@ def test_the_screen_socket_owns_its_session(
             assert refused.value.code == HTTP_WEBSOCKET_POLICY
             assert refused.value.reason.startswith(api.SESSION_BUSY_REASON)
             assert released()
+        auth_store.close()
+
+
+def test_revoking_a_session_ends_the_relay_it_already_holds(
+    populated_store: EventStore,
+    tmp_path: Path,
+    repo: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # The socket is authorised once, at connect. Revocation has to reach a
+    # relay that is already running, or a stolen client keeps the screen for as
+    # long as it keeps the socket open.
+    manager = SessionManager(clock=lambda: 1000)
+    with fake_reversed_device(monkeypatch):
+        monkeypatch.setattr(api, "SCREEN_HEARTBEAT_SECONDS", 0.01)
+        monkeypatch.setattr(api.time, "time", lambda: 1000)
+        monkeypatch.setattr(adb, "resolve_serial", lambda serial: serial or "AAA")
+        monkeypatch.setattr(adb, "run_device_cli", lambda *_a, **_k: "")
+        app, login, auth_store = screen_app(populated_store, tmp_path, repo, manager)
+        granted = login.log_in("admin", "right", "peer", "tablet", 1000)
+        assert granted.tokens is not None
+        headers = {"Authorization": f"Bearer {granted.tokens.access}"}
+
+        def released() -> bool:
+            for _ in range(200):
+                if manager.get("lisa01") is None:
+                    return True
+                time.sleep(0.01)
+            return False
+
+        with TestClient(app) as client:
+            with client.websocket_connect("/api/units/lisa01/screen", headers=headers):
+                assert manager.get("lisa01") is not None
+                login.log_out_everywhere(1000)
+                assert released()
+
+            # The access token has not expired, but its session has.
+            with (
+                pytest.raises(WebSocketDisconnect) as refused,
+                client.websocket_connect("/api/units/lisa01/screen", headers=headers),
+            ):
+                pass
+            assert refused.value.code == HTTP_WEBSOCKET_POLICY
+            held = client.post("/api/units/lisa01/session", headers=headers)
+            assert held.status_code == HTTP_UNAUTHORIZED
         auth_store.close()
 
 
@@ -829,9 +1006,7 @@ def test_call_audio_route_handles_success_busy_and_capability(  # noqa: C901
     monkeypatch.setattr(api, "SessionManager", SessionManager)
 
     with TestClient(app) as client:
-        with client.websocket_connect(
-            "/api/units/lisa01/call/audio", headers=headers
-        ):
+        with client.websocket_connect("/api/units/lisa01/call/audio", headers=headers):
             pass
         assert "pump" in relayed
         assert fake_sessions.current is None
@@ -839,9 +1014,7 @@ def test_call_audio_route_handles_success_busy_and_capability(  # noqa: C901
         fake_sessions.busy = True
         with (
             pytest.raises(WebSocketDisconnect) as refused,
-            client.websocket_connect(
-                "/api/units/lisa01/call/audio", headers=headers
-            ),
+            client.websocket_connect("/api/units/lisa01/call/audio", headers=headers),
         ):
             pass
         assert refused.value.code == HTTP_WEBSOCKET_POLICY
@@ -857,6 +1030,95 @@ def test_call_audio_route_handles_success_busy_and_capability(  # noqa: C901
         assert denied.value.code == HTTP_WEBSOCKET_POLICY
         assert denied.value.reason == "unit capability denied"
 
+    auth_store.close()
+
+
+class HeldSessions:
+    """A call session that is always granted, without touching adb."""
+
+    def __init__(self) -> None:
+        self.current: ScreenSession | None = None
+        self.clock = lambda: 1000
+
+    def acquire(self, unit: str, holder: str, now: int) -> ScreenSession:
+        self.current = ScreenSession(unit, holder, now, now, "43123")
+        return self.current
+
+    def heartbeat(
+        self, _unit: str, _now: int, _holder: str | None = None
+    ) -> ScreenSession | None:
+        return self.current
+
+    def get(self, _unit: str) -> ScreenSession | None:
+        return self.current
+
+    def release(self, _unit: str, _now: int) -> None:
+        self.current = None
+
+
+class HeartbeatRelay:
+    """A relay that carries nothing and runs until its heartbeat ends."""
+
+    def __init__(self, _host: str, _port: int) -> None:
+        pass
+
+    async def open(self) -> None:
+        pass
+
+    async def pump(self, _websocket: Any, heartbeat: Any = None) -> None:
+        await heartbeat()
+
+    async def close(self) -> None:
+        pass
+
+
+def test_call_audio_closes_once_the_call_it_saw_is_over(
+    populated_store: EventStore,
+    tmp_path: Path,
+    repo: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # The far party hanging up is invisible to the client without this: the
+    # call log is optional and the bridge does not end with the call. Idle
+    # before any call is seen is a dial still reaching telephony, not an end.
+    (repo / "units" / "lisa01.env").write_text("")
+    config = GatewayConfig(
+        admin=AdminConfig("admin", hash_password("right")),
+        unit_capabilities={"lisa01": frozenset({"calls"})},
+    )
+    auth_store = AuthStore(tmp_path / "auth.db")
+    login = LoginService(config, auth_store)
+    granted = login.log_in("admin", "right", "peer", "tablet", 1000)
+    assert granted.tokens is not None
+    monkeypatch.setattr(api.time, "time", lambda: 1000)
+    monkeypatch.setattr(api, "CALL_HEARTBEAT_SECONDS", 0.01)
+    answers = iter([False, None, True, None, True, False])
+    asked: list[str] = []
+
+    def call_in_progress(unit: str) -> bool | None:
+        asked.append(unit)
+        return next(answers)
+
+    monkeypatch.setattr(api, "call_in_progress", call_in_progress)
+
+    held = HeldSessions()
+    monkeypatch.setattr(api, "SessionManager", lambda **_kwargs: held)
+    monkeypatch.setattr(api, "VoiceRelay", HeartbeatRelay)
+    app = create_app(config, populated_store, login, sessions=SessionManager())
+    monkeypatch.setattr(api, "SessionManager", SessionManager)
+
+    with (
+        TestClient(app) as client,
+        client.websocket_connect(
+            "/api/units/lisa01/call/audio",
+            headers={"Authorization": f"Bearer {granted.tokens.access}"},
+        ) as socket,
+        pytest.raises(WebSocketDisconnect) as closed,
+    ):
+        socket.receive_bytes()
+    assert closed.value.code == HTTP_WEBSOCKET_NORMAL
+    assert len(asked) == 6
+    assert held.current is None
     auth_store.close()
 
 
@@ -883,8 +1145,7 @@ def test_the_session_holder_cannot_be_named_by_the_caller(
     monkeypatch.setattr(api.time, "time", lambda: 1000)
     monkeypatch.setattr(adb, "resolve_serial", lambda serial: serial or "AAA")
     monkeypatch.setattr(adb, "run_device_cli", lambda *_args, **_kwargs: "")
-    monkeypatch.setattr(adb, "forward", lambda *_args: "43123")
-    monkeypatch.setattr(adb, "remove_forward", lambda *_args: None)
+    no_reverse(monkeypatch)
 
     with TestClient(
         create_app(
@@ -927,8 +1188,7 @@ def test_screen_session_routes_enforce_ownership_and_capability(
     monkeypatch.setattr(api.time, "time", lambda: 1000)
     monkeypatch.setattr(adb, "resolve_serial", lambda serial: serial or "AAA")
     monkeypatch.setattr(adb, "run_device_cli", lambda *_args: "")
-    monkeypatch.setattr(adb, "forward", lambda *_args: "43123")
-    monkeypatch.setattr(adb, "remove_forward", lambda *_args: None)
+    no_reverse(monkeypatch)
     manager = SessionManager(clock=lambda: 1000)
 
     def bearer(token: str) -> dict[str, str]:

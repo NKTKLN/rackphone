@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import secrets
 import sqlite3
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
@@ -73,6 +73,11 @@ class RefreshToken:
     expires_at: int
     last_seen: int
     revoked_at: int | None
+
+
+def _refresh_token(row: sqlite3.Row) -> RefreshToken:
+    """Build a session from one `refresh_tokens` row."""
+    return RefreshToken(**dict(row))
 
 
 @dataclass(frozen=True)
@@ -285,15 +290,7 @@ class AuthStore:
                 "UPDATE refresh_tokens SET last_seen = ? WHERE id = ?",
                 (now, row["id"]),
             )
-        return RefreshToken(
-            id=row["id"],
-            device_label=row["device_label"],
-            scope=row["scope"],
-            issued_at=row["issued_at"],
-            expires_at=row["expires_at"],
-            last_seen=now,
-            revoked_at=row["revoked_at"],
-        )
+        return replace(_refresh_token(row), last_seen=now)
 
     def rotate_refresh(
         self, old_hash: str, new_hash: str, now: int, ttl: int
@@ -378,18 +375,25 @@ class AuthStore:
             "last_seen, revoked_at FROM refresh_tokens "
             "ORDER BY issued_at DESC, id DESC"
         )
-        return [
-            RefreshToken(
-                id=row["id"],
-                device_label=row["device_label"],
-                scope=row["scope"],
-                issued_at=row["issued_at"],
-                expires_at=row["expires_at"],
-                last_seen=row["last_seen"],
-                revoked_at=row["revoked_at"],
-            )
-            for row in rows
-        ]
+        return [_refresh_token(row) for row in rows]
+
+    def live_refresh(self, token_id: int, now: int) -> RefreshToken | None:
+        """Return one session if it is neither revoked nor expired.
+
+        Args:
+            token_id: Refresh-token row id, as carried in an access token.
+            now: Current Unix timestamp in seconds.
+
+        Returns:
+            RefreshToken | None: The live session, or `None` if it is gone.
+        """
+        row = self.connection.execute(
+            "SELECT id, device_label, scope, issued_at, expires_at, "
+            "last_seen, revoked_at FROM refresh_tokens "
+            "WHERE id = ? AND revoked_at IS NULL AND expires_at > ?",
+            (token_id, now),
+        ).fetchone()
+        return None if row is None else _refresh_token(row)
 
     def record_attempt(self, ip: str, username: str, ok: bool, now: int) -> None:
         """Record one login attempt.

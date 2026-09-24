@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 import os
 import sqlite3
+import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -125,6 +126,9 @@ class EventStore:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self.connection = sqlite3.connect(self.path, check_same_thread=False)
         self.connection.row_factory = sqlite3.Row
+        # The API serves sends from a thread pool on this one connection, and
+        # a send's id is read and then taken in two statements.
+        self._send_lock = threading.Lock()
         self.connection.execute("PRAGMA auto_vacuum=INCREMENTAL")
         # WAL so the API can read while the drain loop writes.
         self.connection.execute("PRAGMA journal_mode=WAL")
@@ -168,6 +172,56 @@ class EventStore:
                 if cursor.rowcount:
                     stored.append(event)
         return stored
+
+    def add_sent(
+        self, unit: str, address: str, body: str, timestamp: int
+    ) -> dict[str, Any]:
+        """Store one SMS this gateway sent, so a conversation holds both sides.
+
+        Args:
+            unit: Name of the unit that sent it.
+            address: Destination as the device normalised it.
+            body: The text that was sent.
+            timestamp: When it was queued, in Unix milliseconds.
+
+        Returns:
+            dict[str, Any]: The stored row, as a query would return it.
+        """
+        # The device's own ids for arrivals are positive and climb from the
+        # clock, so a sent message takes a negative one: the two can never meet
+        # in the UNIQUE key, and INSERT OR IGNORE can never drop a send as a
+        # duplicate. Each is one below the last, so two sends in one
+        # millisecond are still two rows.
+        with self._send_lock, self.connection:
+            row = self.connection.execute(
+                "SELECT COALESCE(MIN(source_id), 0) AS lowest FROM events "
+                "WHERE unit = ? AND kind = ?",
+                (unit, KIND_SMS),
+            ).fetchone()
+            source_id = min(-timestamp, row["lowest"] - 1)
+            cursor = self.connection.execute(
+                INSERT_SQL,
+                (
+                    unit,
+                    KIND_SMS,
+                    source_id,
+                    address,
+                    body,
+                    timestamp,
+                    "out",
+                    None,
+                    json.dumps({"kind": KIND_SMS, "direction": "out"}),
+                    int(time.time()),
+                ),
+            )
+            if cursor.rowcount != 1:
+                # lastrowid would still name the previous insert, and the
+                # caller would report someone else's message as this one.
+                raise RuntimeError("sent message was not stored")
+            stored = self.connection.execute(
+                "SELECT * FROM events WHERE id = ?", (cursor.lastrowid,)
+            ).fetchone()
+        return dict(stored)
 
     def query_events(
         self,

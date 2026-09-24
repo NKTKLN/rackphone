@@ -171,6 +171,29 @@ class TestForwarding:
         assert len(pushed) == 1
         assert gateway.stats.pushed == 1
 
+    @pytest.mark.usefixtures("repo")
+    def test_an_outgoing_call_is_stored_but_not_pushed(
+        self, store: EventStore, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        placed = {"kind": "call", "id": 7, "address": "+1", "direction": "out"}
+        monkeypatch.setattr(adb, "resolve_serial", lambda serial: serial or "AAA")
+        monkeypatch.setattr(
+            adb,
+            "run_device_cli",
+            lambda _serial, arguments, **_kwargs: (
+                json.dumps(placed) + "\n" if arguments[-1] == "drain" else ""
+            ),
+        )
+        pushed: list[httpx.Request] = []
+        gateway = MessageGateway(
+            GatewayConfig(ntfy=NTFY_CONFIG),
+            store,
+            make_forwarder(httpx.MockTransport(lambda r: _record(pushed, r))),
+        )
+
+        assert gateway.drain_unit(units.create_unit("lisa01", "AAA")) == 1
+        assert pushed == []
+
     @pytest.mark.usefixtures("device_calls", "repo")
     def test_a_push_failure_is_counted_not_raised(self, store: EventStore) -> None:
         def refuse(_request: httpx.Request) -> httpx.Response:

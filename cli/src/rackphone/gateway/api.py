@@ -14,7 +14,7 @@ import os
 import tempfile
 import time
 from collections.abc import AsyncIterator, Callable, Iterable
-from dataclasses import asdict
+from dataclasses import asdict, dataclass
 from http import HTTPStatus
 from pathlib import Path
 from typing import Annotated, Any
@@ -41,12 +41,21 @@ from rackphone.gateway.auth import (
     AccessClaims,
     verify_password,
 )
-from rackphone.gateway.call import CallError, answer_call, reject_call
+from rackphone.gateway.call import (
+    CallError,
+    answer_call,
+    call_in_progress,
+    dial_call,
+    end_call,
+    reject_call,
+    send_dtmf,
+)
 from rackphone.gateway.config import (
     DEFAULT_TRUSTED_PROXIES,
     GatewayConfig,
     is_loopback,
 )
+from rackphone.gateway.contacts import ContactBook, ContactsError
 from rackphone.gateway.drain import MessageGateway
 from rackphone.gateway.failures import DeviceBoundaryError
 from rackphone.gateway.files import (
@@ -64,7 +73,7 @@ from rackphone.gateway.login import LoginService, RefusalReason, Tokens
 from rackphone.gateway.presence import ClientPresence
 from rackphone.gateway.relay import ScreenRelay
 from rackphone.gateway.send import SendError, send_sms
-from rackphone.gateway.session import SessionBusy, SessionManager
+from rackphone.gateway.session import ScreenSession, SessionBusy, SessionManager
 from rackphone.gateway.store import (
     DEFAULT_QUERY_LIMIT,
     KIND_CALL,
@@ -79,6 +88,9 @@ from rackphone.metrics.exposition import collect_unit_metrics, parse_samples
 STREAM_POLL_SECONDS = 2.0
 STREAM_BATCH_SIZE = 100
 SCREEN_HEARTBEAT_SECONDS = 10
+# A call relay beats faster: its heartbeat also watches for the call ending,
+# and a hang-up the operator hears ten seconds late is a hang-up missed.
+CALL_HEARTBEAT_SECONDS = 2
 # Shared with the client, which branches on it; see relay_screen.
 SESSION_BUSY_REASON = "session_busy"
 
@@ -110,6 +122,18 @@ class PasswordBody(BaseModel):
     """Administrator password required for a sensitive change."""
 
     password: str
+
+
+class DialBody(BaseModel):
+    """One outbound call request."""
+
+    to: str
+
+
+class DtmfBody(BaseModel):
+    """Keys to press on the current call."""
+
+    digits: str
 
 
 class SendBody(BaseModel):
@@ -206,6 +230,20 @@ def _tokens_body(tokens: Tokens) -> dict[str, str | int]:
     }
 
 
+@dataclass(frozen=True)
+class RelayRoute:
+    """What one kind of WebSocket relay needs from its unit and its phone."""
+
+    capability: str
+    manager: SessionManager
+    make_relay: Callable[[ScreenSession], ScreenRelay | VoiceRelay]
+    ended_reason: str
+    heartbeat_seconds: float
+    # Whether what the relay carries is still there on the unit, or `None`
+    # when that cannot be told; the relay ends once it was and is no longer.
+    in_use: Callable[[str], bool | None] | None = None
+
+
 def create_app(  # noqa: C901, PLR0913, PLR0915, PLR0917
     config: GatewayConfig,
     store: EventStore,
@@ -213,6 +251,7 @@ def create_app(  # noqa: C901, PLR0913, PLR0915, PLR0917
     gateway: MessageGateway | None = None,
     presence: ClientPresence | None = None,
     sessions: SessionManager | None = None,
+    contacts: ContactBook | None = None,
 ) -> FastAPI:
     """Build the FastAPI application served by `rackphone gateway`.
 
@@ -223,6 +262,7 @@ def create_app(  # noqa: C901, PLR0913, PLR0915, PLR0917
         gateway: Running drain loop whose counters are exposed by the API.
         presence: Shared tracker for live event streams.
         sessions: Shared screen-session owner, or an empty local manager.
+        contacts: Address-book cache, or one that reads units over adb.
 
     Returns:
         FastAPI: The configured application.
@@ -230,8 +270,13 @@ def create_app(  # noqa: C901, PLR0913, PLR0915, PLR0917
     legacy_enabled = bool(config.api_token and is_loopback(config.api_host))
     client_presence = presence or ClientPresence()
     screen_sessions = sessions or SessionManager()
+    contact_book = contacts or ContactBook()
     voice_sessions = SessionManager(
-        plugin="voice", socket="localabstract:rackphone-voice", kind="call"
+        plugin="voice",
+        socket="localabstract:rackphone-voice",
+        kind="call",
+        # The bridge checks who connects, so a forward is safe for it.
+        reverse=False,
     )
     if config.api_token and not legacy_enabled:
         # Removing this outright would break the running compose deployment;
@@ -271,6 +316,30 @@ def create_app(  # noqa: C901, PLR0913, PLR0915, PLR0917
     control_auth = [Depends(require_scope(SCOPE_CONTROL))]
     admin_auth = [Depends(require_scope(SCOPE_ADMIN))]
 
+    def control_session(authorization: str) -> tuple[str, int | None]:
+        """Authenticate a control token against a session that is still live.
+
+        Args:
+            authorization: Raw `Authorization` header value.
+
+        Returns:
+            tuple[str, int | None]: The device label and its refresh-session
+            id, which is `None` for the legacy token.
+
+        Raises:
+            HTTPException: If the token is invalid or its session is revoked.
+        """
+        token = bearer_token(authorization)
+        now = int(time.time())
+        claims: AccessClaims | None = login.authorise(token, now, SCOPE_CONTROL)
+        if claims is not None:
+            session = login.store.live_refresh(claims.refresh_id, now)
+            if session is not None:
+                return session.device_label, session.id
+        if legacy_enabled and hmac.compare_digest(token, config.api_token):
+            return "legacy", None
+        raise HTTPException(HTTPStatus.UNAUTHORIZED, "invalid or missing bearer token")
+
     def control_holder(authorization: Annotated[str, Header()] = "") -> str:
         """Authenticate a control token and return its device label."""
         # Callers take this as a default value, never as `Annotated[...,
@@ -278,44 +347,21 @@ def create_app(  # noqa: C901, PLR0913, PLR0915, PLR0917
         # FastAPI would evaluate that string against module globals, fail to
         # find this closure, and quietly treat `holder` as a query parameter -
         # letting any caller name itself the session's owner.
-        token = bearer_token(authorization)
-        claims: AccessClaims | None = login.authorise(
-            token, int(time.time()), SCOPE_CONTROL
-        )
-        if claims is not None:
-            session = next(
-                (
-                    item
-                    for item in login.store.list_refresh()
-                    if item.id == claims.refresh_id
-                ),
-                None,
-            )
-            if session is not None:
-                return session.device_label
-        if legacy_enabled and hmac.compare_digest(token, config.api_token):
-            return "legacy"
-        raise HTTPException(HTTPStatus.UNAUTHORIZED, "invalid or missing bearer token")
+        return control_session(authorization)[0]
 
-    def screen_unit(unit: str) -> None:
-        """Require a configured unit with the screen capability."""
+    def require_unit(unit: str, capability: str) -> None:
+        """Require a configured unit that carries one capability.
+
+        Args:
+            unit: Name of the rack unit in the request path.
+            capability: Capability the route needs on that unit.
+
+        Raises:
+            HTTPException: 404 for an unknown unit, 403 for a denied one.
+        """
         if not any(item.name == unit for item in units.load_all_units()):
             raise HTTPException(HTTPStatus.NOT_FOUND, "unknown unit")
-        if "screen" not in config.capabilities_for(unit):
-            raise HTTPException(HTTPStatus.FORBIDDEN, "unit capability denied")
-
-    def calls_unit(unit: str) -> None:
-        """Require a configured unit with the calls capability."""
-        if not any(item.name == unit for item in units.load_all_units()):
-            raise HTTPException(HTTPStatus.NOT_FOUND, "unknown unit")
-        if "calls" not in config.capabilities_for(unit):
-            raise HTTPException(HTTPStatus.FORBIDDEN, "unit capability denied")
-
-    def files_unit(unit: str) -> None:
-        """Require a configured unit with the files capability."""
-        if not any(item.name == unit for item in units.load_all_units()):
-            raise HTTPException(HTTPStatus.NOT_FOUND, "unknown unit")
-        if "files" not in config.capabilities_for(unit):
+        if capability not in config.capabilities_for(unit):
             raise HTTPException(HTTPStatus.FORBIDDEN, "unit capability denied")
 
     def translate_device_error(error: DeviceBoundaryError) -> HTTPException:
@@ -334,20 +380,109 @@ def create_app(  # noqa: C901, PLR0913, PLR0915, PLR0917
         )
         return HTTPException(status, str(error))
 
+    def renew_lease(
+        manager: SessionManager, unit: str, holder: str, refresh_id: int | None
+    ) -> bool:
+        """Renew a WebSocket-owned lease while its login session is live.
+
+        Returns:
+            bool: Whether the relay may keep running.
+        """
+        # The socket was authorised once, at connect. Without this check a
+        # revoked device would keep a screen or a call for as long as it held
+        # the socket open, which is exactly what revocation promises to stop.
+        if (
+            refresh_id is not None
+            and login.store.live_refresh(refresh_id, int(time.time())) is None
+        ):
+            return False
+        return manager.heartbeat(unit, manager.clock(), holder) is not None
+
     async def relay_heartbeat(
-        manager: SessionManager, unit: str, holder: str
+        route: RelayRoute, unit: str, holder: str, refresh_id: int | None
     ) -> None:
-        """Keep a WebSocket-owned lease fresh while it remains open."""
+        """Keep a WebSocket-owned lease fresh until it may no longer run."""
+        seen_in_use = False
         while True:
-            await asyncio.sleep(SCREEN_HEARTBEAT_SECONDS)
-            refreshed = await asyncio.to_thread(
-                manager.heartbeat,
-                unit,
-                manager.clock(),
-                holder,
-            )
-            if refreshed is None:
+            await asyncio.sleep(route.heartbeat_seconds)
+            if not await asyncio.to_thread(
+                renew_lease, route.manager, unit, holder, refresh_id
+            ):
                 return
+            if route.in_use is None:
+                continue
+            # Only an end that was seen as a start counts. Audio opens while a
+            # dial is still reaching telephony, which reads as idle at first.
+            in_use = await asyncio.to_thread(route.in_use, unit)
+            if in_use:
+                seen_in_use = True
+            elif in_use is False and seen_in_use:
+                return
+
+    async def hold_relay(websocket: WebSocket, unit: str, route: RelayRoute) -> None:
+        """Hold a unit's session and relay its bytes over one WebSocket.
+
+        Args:
+            websocket: Client WebSocket, not yet accepted.
+            unit: Name of the rack unit in the request path.
+            route: What this kind of relay needs and how it is built.
+        """
+        manager = route.manager
+        try:
+            holder, refresh_id = control_session(
+                websocket.headers.get("authorization", "")
+            )
+            require_unit(unit, route.capability)
+        except HTTPException as exc:
+            await websocket.close(code=1008, reason=str(exc.detail))
+            return
+
+        relay: ScreenRelay | VoiceRelay | None = None
+        session = None
+        acquired = False
+        try:
+            try:
+                session = await asyncio.to_thread(
+                    manager.acquire, unit, holder, manager.clock()
+                )
+                acquired = True
+            except SessionBusy as exc:
+                # A machine-readable prefix, not prose. The client tells "held
+                # by someone else" from "the network died" by this token, and a
+                # reworded sentence would silently turn one into the other
+                # without a single test noticing. Close reasons are capped at
+                # 123 bytes, so the holder is trimmed rather than risking a
+                # frame the peer rejects outright.
+                await websocket.close(
+                    code=1008, reason=f"{SESSION_BUSY_REASON} {exc.holder[:64]}"
+                )
+                return
+            relay = route.make_relay(session)
+            await relay.open()
+            await websocket.accept()
+            await relay.pump(
+                websocket,
+                heartbeat=lambda: relay_heartbeat(route, unit, holder, refresh_id),
+            )
+            await websocket.close()
+        except Exception:
+            await websocket.close(code=1011, reason=route.ended_reason)
+        finally:
+            # Nothing cancellable may stand between here and the release. By the
+            # time this runs the client is usually gone and this task is already
+            # being cancelled, and a single `await` would raise straight past
+            # the release - leaving the phone streaming to nobody. The
+            # manager's calls are synchronous, so they are made directly;
+            # blocking this loop for the length of one adb call is the cheaper
+            # of the two failures.
+            if acquired and manager.get(unit) == session:
+                # An explicit takeover may replace this socket's session while
+                # the pump unwinds. The old socket must not release the new
+                # owner, which is what the comparison above is for.
+                manager.release(unit, manager.clock())
+            if relay is not None:
+                with contextlib.suppress(Exception):
+                    await relay.close()
 
     def permitted_rows(
         kind: str | None,
@@ -430,7 +565,7 @@ def create_app(  # noqa: C901, PLR0913, PLR0915, PLR0917
         unit: str, holder: str = Depends(control_holder)
     ) -> dict[str, Any]:
         """Acquire exclusive screen ownership for the calling device."""
-        screen_unit(unit)
+        require_unit(unit, "screen")
         now = screen_sessions.clock()
         try:
             session = screen_sessions.acquire(unit, holder, now)
@@ -447,7 +582,7 @@ def create_app(  # noqa: C901, PLR0913, PLR0915, PLR0917
         unit: str, holder: str = Depends(control_holder)
     ) -> dict[str, Any]:
         """Explicitly replace the current screen owner."""
-        screen_unit(unit)
+        require_unit(unit, "screen")
         now = screen_sessions.clock()
         session = screen_sessions.take_over(unit, holder, now)
         login.store.record_audit(now, "session_takeover", actor=holder, subject=unit)
@@ -461,7 +596,7 @@ def create_app(  # noqa: C901, PLR0913, PLR0915, PLR0917
         unit: str, holder: str = Depends(control_holder)
     ) -> None:
         """Renew screen ownership only for the device that holds it."""
-        screen_unit(unit)
+        require_unit(unit, "screen")
         if (
             screen_sessions.heartbeat(unit, screen_sessions.clock(), holder=holder)
             is None
@@ -473,7 +608,7 @@ def create_app(  # noqa: C901, PLR0913, PLR0915, PLR0917
         unit: str, holder: str = Depends(control_holder)
     ) -> None:
         """Release the unit screen whether or not it has a recorded owner."""
-        screen_unit(unit)
+        require_unit(unit, "screen")
         now = screen_sessions.clock()
         screen_sessions.release(unit, now)
         login.store.record_audit(now, "session_release", actor=holder, subject=unit)
@@ -483,115 +618,54 @@ def create_app(  # noqa: C901, PLR0913, PLR0915, PLR0917
         unit: str, _holder: str = Depends(control_holder)
     ) -> dict[str, Any] | None:
         """Return the current screen owner, if the unit has one."""
-        screen_unit(unit)
+        require_unit(unit, "screen")
         session = screen_sessions.get(unit)
         return None if session is None else asdict(session)
+
+    screen_route = RelayRoute(
+        capability="screen",
+        manager=screen_sessions,
+        make_relay=lambda session: ScreenRelay(screen_sessions.listener(session.unit)),
+        ended_reason="screen relay ended",
+        heartbeat_seconds=SCREEN_HEARTBEAT_SECONDS,
+    )
+    voice_route = RelayRoute(
+        capability="calls",
+        manager=voice_sessions,
+        make_relay=lambda session: VoiceRelay("127.0.0.1", int(session.local_port)),
+        ended_reason="call audio relay ended",
+        heartbeat_seconds=CALL_HEARTBEAT_SECONDS,
+        in_use=call_in_progress,
+    )
 
     @app.websocket("/api/units/{unit}/screen")
     async def relay_screen(websocket: WebSocket, unit: str) -> None:
         """Hold a screen session and relay its opaque video and control bytes."""
-        try:
-            holder = control_holder(websocket.headers.get("authorization", ""))
-            screen_unit(unit)
-        except HTTPException as exc:
-            await websocket.close(code=1008, reason=str(exc.detail))
-            return
-
-        relay: ScreenRelay | None = None
-        session = None
-        acquired = False
-        try:
-            try:
-                session = await asyncio.to_thread(
-                    screen_sessions.acquire,
-                    unit,
-                    holder,
-                    screen_sessions.clock(),
-                )
-                acquired = True
-            except SessionBusy as exc:
-                # A machine-readable prefix, not prose. The client tells "held
-                # by someone else" from "the network died" by this token, and a
-                # reworded sentence would silently turn one into the other
-                # without a single test noticing. Close reasons are capped at
-                # 123 bytes, so the holder is trimmed rather than risking a
-                # frame the peer rejects outright.
-                holder = exc.holder[:64]
-                await websocket.close(
-                    code=1008, reason=f"{SESSION_BUSY_REASON} {holder}"
-                )
-                return
-            relay = ScreenRelay("127.0.0.1", int(session.local_port))
-            await relay.open()
-            await websocket.accept()
-            await relay.pump(
-                websocket,
-                heartbeat=lambda: relay_heartbeat(screen_sessions, unit, holder),
-            )
-            await websocket.close()
-        except Exception:
-            await websocket.close(code=1011, reason="screen relay ended")
-        finally:
-            # Nothing cancellable may stand between here and the release. By the
-            # time this runs the client is usually gone and this task is already
-            # being cancelled, and a single `await` would raise straight past
-            # the release - leaving the phone encoding a screen nobody watches.
-            # The manager's calls are synchronous, so they are made directly;
-            # blocking this loop for the length of one adb call is the cheaper
-            # of the two failures.
-            if acquired and screen_sessions.get(unit) == session:
-                # An explicit takeover may replace this socket's session while
-                # the pump unwinds. The old socket must not release the new
-                # owner, which is what the comparison above is for.
-                screen_sessions.release(unit, screen_sessions.clock())
-            if relay is not None:
-                with contextlib.suppress(Exception):
-                    await relay.close()
+        await hold_relay(websocket, unit, screen_route)
 
     @app.websocket("/api/units/{unit}/call/audio")
     async def relay_call_audio(websocket: WebSocket, unit: str) -> None:
         """Hold a call session and relay its opaque bidirectional audio."""
-        try:
-            holder = control_holder(websocket.headers.get("authorization", ""))
-            calls_unit(unit)
-        except HTTPException as exc:
-            await websocket.close(code=1008, reason=str(exc.detail))
-            return
+        await hold_relay(websocket, unit, voice_route)
 
-        relay: VoiceRelay | None = None
-        session = None
-        acquired = False
+    @app.get("/api/units/{unit}/contacts", dependencies=read_auth)
+    def read_unit_contacts(unit: str, refresh: bool = False) -> list[dict[str, Any]]:
+        """List a unit's address book, read from the unit and kept briefly.
+
+        Args:
+            unit: Name of the configured rack unit.
+            refresh: Read the unit now rather than returning a recent copy.
+
+        Returns:
+            list[dict[str, Any]]: One entry per number, in reading order.
+        """
+        # Names belong with messages and calls, so the capability that shows
+        # those is the one that shows who they are from.
+        require_unit(unit, "sms")
         try:
-            try:
-                session = await asyncio.to_thread(
-                    voice_sessions.acquire,
-                    unit,
-                    holder,
-                    voice_sessions.clock(),
-                )
-                acquired = True
-            except SessionBusy as exc:
-                holder = exc.holder[:64]
-                await websocket.close(
-                    code=1008, reason=f"{SESSION_BUSY_REASON} {holder}"
-                )
-                return
-            relay = VoiceRelay("127.0.0.1", int(session.local_port))
-            await relay.open()
-            await websocket.accept()
-            await relay.pump(
-                websocket,
-                heartbeat=lambda: relay_heartbeat(voice_sessions, unit, holder),
-            )
-            await websocket.close()
-        except Exception:
-            await websocket.close(code=1011, reason="call audio relay ended")
-        finally:
-            if acquired and voice_sessions.get(unit) == session:
-                voice_sessions.release(unit, voice_sessions.clock())
-            if relay is not None:
-                with contextlib.suppress(Exception):
-                    await relay.close()
+            return contact_book.get(unit, refresh=refresh)
+        except ContactsError as exc:
+            raise translate_device_error(exc) from exc
 
     @app.get("/api/units/{unit}/telemetry", dependencies=read_auth)
     def read_telemetry(unit: str) -> dict[str, Any]:
@@ -623,7 +697,7 @@ def create_app(  # noqa: C901, PLR0913, PLR0915, PLR0917
     @app.get("/api/units/{unit}/files", dependencies=control_auth)
     def read_unit_files(unit: str) -> list[dict[str, Any]]:
         """List files in one unit's confined transfer directory."""
-        files_unit(unit)
+        require_unit(unit, "files")
         try:
             return list_files(unit)
         except FilesError as exc:
@@ -634,7 +708,7 @@ def create_app(  # noqa: C901, PLR0913, PLR0915, PLR0917
         unit: str, name: str, request: Request
     ) -> dict[str, Any]:
         """Stream one request body to disk, then transfer it to a unit."""
-        files_unit(unit)
+        require_unit(unit, "files")
         try:
             resolve(name)
         except FilesError as exc:
@@ -674,7 +748,7 @@ def create_app(  # noqa: C901, PLR0913, PLR0915, PLR0917
     @app.get("/api/units/{unit}/files/{name}", dependencies=control_auth)
     def download_unit_file(unit: str, name: str) -> FileResponse:
         """Download one checksummed file and remove its host temporary copy."""
-        files_unit(unit)
+        require_unit(unit, "files")
         try:
             resolve(name)
         except FilesError as exc:
@@ -706,7 +780,7 @@ def create_app(  # noqa: C901, PLR0913, PLR0915, PLR0917
     )
     def delete_unit_file(unit: str, name: str) -> None:
         """Remove one confined file and audit its name, never its contents."""
-        files_unit(unit)
+        require_unit(unit, "files")
         try:
             remove(unit, name)
         except FileNotFoundError as exc:
@@ -883,12 +957,22 @@ def create_app(  # noqa: C901, PLR0913, PLR0915, PLR0917
         login.store.record_audit(
             int(time.time()), "send_sms", subject=body.unit, detail=f"to={body.to}"
         )
-        return answer
+        # The text does go into the event store, which is where messages live
+        # and where retention applies: without it a conversation would show
+        # only the other side. The stream then carries it to every client.
+        queued = answer.get("ts")
+        event = store.add_sent(
+            body.unit,
+            str(answer.get("to") or body.to),
+            body.body,
+            queued if isinstance(queued, int) else int(time.time() * 1000),
+        )
+        return {**answer, "event": event}
 
     @app.post("/api/units/{unit}/call/answer", dependencies=control_auth)
     def answer_unit_call(unit: str) -> dict[str, Any]:
         """Answer the ringing call on a unit authorised for calls."""
-        calls_unit(unit)
+        require_unit(unit, "calls")
         try:
             outcome = answer_call(unit)
         except CallError as exc:
@@ -899,13 +983,48 @@ def create_app(  # noqa: C901, PLR0913, PLR0915, PLR0917
     @app.post("/api/units/{unit}/call/reject", dependencies=control_auth)
     def reject_unit_call(unit: str) -> dict[str, Any]:
         """Reject the ringing call on a unit authorised for calls."""
-        calls_unit(unit)
+        require_unit(unit, "calls")
         try:
             outcome = reject_call(unit)
         except CallError as exc:
             raise translate_device_error(exc) from exc
         login.store.record_audit(int(time.time()), "reject_call", subject=unit)
         return outcome
+
+    @app.post("/api/units/{unit}/call/dial", dependencies=control_auth)
+    def dial_unit_call(unit: str, body: DialBody) -> dict[str, Any]:
+        """Place a call from a unit authorised for calls."""
+        require_unit(unit, "calls")
+        try:
+            outcome = dial_call(unit, body.to)
+        except CallError as exc:
+            raise translate_device_error(exc) from exc
+        # A placed call is billable and reaches a person, like a sent SMS.
+        login.store.record_audit(
+            int(time.time()), "dial_call", subject=unit, detail=f"to={body.to}"
+        )
+        return outcome
+
+    @app.post("/api/units/{unit}/call/end", dependencies=control_auth)
+    def end_unit_call(unit: str) -> dict[str, Any]:
+        """End the current call on a unit authorised for calls."""
+        require_unit(unit, "calls")
+        try:
+            outcome = end_call(unit)
+        except CallError as exc:
+            raise translate_device_error(exc) from exc
+        login.store.record_audit(int(time.time()), "end_call", subject=unit)
+        return outcome
+
+    @app.post("/api/units/{unit}/call/dtmf", dependencies=control_auth)
+    def dtmf_unit_call(unit: str, body: DtmfBody) -> dict[str, Any]:
+        """Press keys on the current call of a unit authorised for calls."""
+        require_unit(unit, "calls")
+        try:
+            return send_dtmf(unit, body.digits)
+        except CallError as exc:
+            # Not audited: keys pressed into a bank's menu can be a PIN.
+            raise translate_device_error(exc) from exc
 
     @app.get("/api/stream", dependencies=read_auth)
     async def stream_events() -> StreamingResponse:
