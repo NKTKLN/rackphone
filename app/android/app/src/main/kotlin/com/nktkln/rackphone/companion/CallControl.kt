@@ -14,8 +14,10 @@ import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
 import android.telecom.Call
+import android.telecom.PhoneAccountHandle
 import android.telecom.TelecomManager
 import android.telecom.VideoProfile
+import android.telephony.TelephonyManager
 import org.json.JSONObject
 
 enum class CallOperation { ANSWER, REJECT }
@@ -88,9 +90,13 @@ object CallControl {
         if (!HostFiles.granted(context, Manifest.permission.CALL_PHONE)) {
             return status("rejected", "permission_denied")
         }
+        val account = phoneAccountFor(context)
+        val extras = Bundle().apply {
+            if (account != null) putParcelable(TelecomManager.EXTRA_PHONE_ACCOUNT_HANDLE, account)
+        }
         val placed = runCatching {
             context.getSystemService(TelecomManager::class.java)
-                .placeCall(Uri.fromParts("tel", number, null), Bundle())
+                .placeCall(Uri.fromParts("tel", number, null), extras)
             true
         }.getOrDefault(false)
         // The unit's own clock, so the host can tell this call's hang-up record
@@ -100,6 +106,30 @@ object CallControl {
         } else {
             status("failed")
         }
+    }
+
+    /**
+     * The SIM a placed call goes out on, when there is a choice to make.
+     *
+     * With two SIMs and no default for calls, Telecom stops and asks on the
+     * unit's screen, which nobody is looking at, so the call just hangs. The
+     * configured SIM wins, then the one Android sends SMS from - the same rule
+     * a send follows, so one unit speaks with one number.
+     */
+    @SuppressLint("MissingPermission")
+    private fun phoneAccountFor(context: Context): PhoneAccountHandle? {
+        val telecom = context.getSystemService(TelecomManager::class.java)
+        val accounts = runCatching { telecom.callCapablePhoneAccounts }.getOrNull().orEmpty()
+        if (accounts.size <= 1) return null
+        val configured = Config.of(context).subId
+        val wanted = if (configured >= 0) configured else Sims.defaultSubId()
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            val telephony = context.getSystemService(TelephonyManager::class.java)
+            accounts.firstOrNull {
+                runCatching { telephony.getSubscriptionId(it) }.getOrNull() == wanted
+            }?.let { return it }
+        }
+        return accounts.first()
     }
 
     /** Hang up whatever call the unit has, ringing or not. */
