@@ -21,6 +21,9 @@ object Commands {
     /** Export the address book to a file the host reads. */
     const val ACTION_CONTACTS = "$PKG.CONTACTS"
 
+    /** List the SIMs, so the host can offer a choice between them. */
+    const val ACTION_SIMS = "$PKG.SIMS"
+
     /** Place, end, and press keys on a call; see [CallControl]. */
     const val ACTION_DIAL = "$PKG.DIAL"
     const val ACTION_END = "$PKG.END"

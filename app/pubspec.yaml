@@ -6,7 +6,7 @@ description: >
 publish_to: 'none'
 
 # Matches the module versions in modules/*/module.prop.
-version: 0.1.0+1
+version: 0.2.0+2
 
 environment:
   sdk: ^3.12.2

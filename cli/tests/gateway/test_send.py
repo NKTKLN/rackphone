@@ -94,3 +94,45 @@ def test_the_action_it_calls_is_one_the_plugin_declares() -> None:
 
     script = (root / "modules/rackphone-companion/rackphone/action.sh").read_text()
     assert f"\n  {send.SEND_ACTION})" in script
+
+
+def _device(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, record: dict[str, object]
+) -> list[list[str]]:
+    target = units.Unit("lisa01", tmp_path / "lisa01.env", serial="SERIAL")
+    monkeypatch.setattr(units.Unit, "load", lambda _name: target)
+    monkeypatch.setattr(adb, "resolve_serial", str)
+    seen: list[list[str]] = []
+
+    def run(_serial: str, arguments: list[str], **_kwargs: object) -> str:
+        seen.append(arguments)
+        return json.dumps(record)
+
+    monkeypatch.setattr(adb, "run_device_cli", run)
+    return seen
+
+
+def test_a_chosen_sim_follows_the_body(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    seen = _device(monkeypatch, tmp_path, {"status": "queued", "sub_id": 2})
+    assert send_sms("lisa01", "+7900", "hello", sim=2)["sub_id"] == 2
+    assert seen == [["action", "companion", "send", "+7900", "hello", "2"]]
+
+
+def test_a_negative_sim_is_refused_before_device_access(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    seen = _device(monkeypatch, tmp_path, {"status": "queued"})
+    with pytest.raises(SendError, match="sim"):
+        send_sms("lisa01", "+7900", "hello", sim=-1)
+    assert seen == []
+
+
+def test_a_sim_the_unit_lacks_is_not_a_device_failure(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _device(monkeypatch, tmp_path, {"status": "rejected", "error": "unknown_sim"})
+    with pytest.raises(SendError, match="no SIM 7") as raised:
+        send_sms("lisa01", "+7900", "hello", sim=7)
+    assert not raised.value.device_failure

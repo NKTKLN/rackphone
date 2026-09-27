@@ -1,14 +1,29 @@
 import 'package:flutter/material.dart';
 
+import '../../api/models.dart';
+import '../../data/sim_book.dart';
+import '../sim_picker.dart';
 import 'call_page.dart';
 
 /// Types a number and places the call, as a phone's dialler does.
 class DialpadPage extends StatefulWidget {
-  const DialpadPage({required this.unit, required this.onCall, super.key});
+  const DialpadPage({
+    required this.unit,
+    required this.onCall,
+    this.sims,
+    this.history = const <GatewayEvent>[],
+    super.key,
+  });
 
   /// Which unit the call goes out from, shown so it is never a surprise.
   final String unit;
-  final ValueChanged<String> onCall;
+
+  /// Places the call; a null SIM leaves the choice to the unit.
+  final void Function(String number, int? sim) onCall;
+  final SimBook? sims;
+
+  /// Messages and calls, so a known number keeps the SIM it last used.
+  final Iterable<GatewayEvent> history;
 
   @override
   State<DialpadPage> createState() => _DialpadPageState();
@@ -16,6 +31,10 @@ class DialpadPage extends StatefulWidget {
 
 class _DialpadPageState extends State<DialpadPage> {
   String _number = '';
+  int? _chosenSim;
+
+  int? get _sim =>
+      _chosenSim ?? widget.sims?.preferredFor(_number, widget.history);
 
   void _key(String key) => setState(() => _number += key);
 
@@ -30,8 +49,9 @@ class _DialpadPageState extends State<DialpadPage> {
 
   void _call() {
     if (!_callable) return;
+    final sim = _sim;
     Navigator.of(context).pop();
-    widget.onCall(_number);
+    widget.onCall(_number, sim);
   }
 
   @override
@@ -71,6 +91,11 @@ class _DialpadPageState extends State<DialpadPage> {
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 32),
               child: Keypad(onKey: _key, onPlus: () => _key('+')),
+            ),
+            SimPicker(
+              book: widget.sims,
+              selected: _sim,
+              onSelected: (sim) => setState(() => _chosenSim = sim),
             ),
             const SizedBox(height: 16),
             FloatingActionButton.large(

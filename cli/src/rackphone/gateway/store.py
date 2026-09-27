@@ -174,7 +174,12 @@ class EventStore:
         return stored
 
     def add_sent(
-        self, unit: str, address: str, body: str, timestamp: int
+        self,
+        unit: str,
+        address: str,
+        body: str,
+        timestamp: int,
+        sub: int | None = None,
     ) -> dict[str, Any]:
         """Store one SMS this gateway sent, so a conversation holds both sides.
 
@@ -183,6 +188,7 @@ class EventStore:
             address: Destination as the device normalised it.
             body: The text that was sent.
             timestamp: When it was queued, in Unix milliseconds.
+            sub: SIM it went out on, when the device said.
 
         Returns:
             dict[str, Any]: The stored row, as a query would return it.
@@ -210,7 +216,12 @@ class EventStore:
                     timestamp,
                     "out",
                     None,
-                    json.dumps({"kind": KIND_SMS, "direction": "out"}),
+                    # In the raw record like an arrival's, which is where a
+                    # client already looks for the SIM a message used.
+                    json.dumps(
+                        {"kind": KIND_SMS, "direction": "out"}
+                        | ({} if sub is None else {"sub": sub})
+                    ),
                     int(time.time()),
                 ),
             )

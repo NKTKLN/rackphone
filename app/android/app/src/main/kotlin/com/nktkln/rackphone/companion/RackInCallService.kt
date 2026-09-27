@@ -51,7 +51,8 @@ class RackInCallService : InCallService() {
                 .put("address", Numbers.sanitise(number) ?: number)
                 .put("ts", tracked.startedAtMs)
                 .put("direction", "out")
-                .put("duration", if (activeAt == null) 0 else (now - activeAt) / 1000),
+                .put("duration", if (activeAt == null) 0 else (now - activeAt) / 1000)
+                .put("sub", Sims.subIdOf(this, call.details?.accountHandle)),
         )
         HostFiles.writeStatus(this)
     }

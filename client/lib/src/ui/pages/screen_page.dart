@@ -185,7 +185,6 @@ class _ScreenPageState extends State<ScreenPage> {
             padding: const EdgeInsets.only(right: 72),
             child: _DeviceKeys(controller: controller),
           ),
-          _NavigationKeys(controller: controller),
         ],
       ),
     );
@@ -274,33 +273,6 @@ class _DeviceKeys extends StatelessWidget {
         key(Icons.volume_down, 'Volume down', AndroidKey.volumeDown),
         key(Icons.volume_up, 'Volume up', AndroidKey.volumeUp),
         key(Icons.volume_off_outlined, 'Mute', AndroidKey.volumeMute),
-      ],
-    );
-  }
-}
-
-class _NavigationKeys extends StatelessWidget {
-  const _NavigationKeys({required this.controller});
-
-  final ScreenController controller;
-
-  @override
-  Widget build(BuildContext context) {
-    final color = Theme.of(context).colorScheme.onSurfaceVariant;
-    Widget key(IconData icon, String label, int keycode) => IconButton(
-      tooltip: label,
-      color: color,
-      onPressed: controller.state == ScreenState.live
-          ? () => controller.pressKey(keycode)
-          : null,
-      icon: Icon(icon),
-    );
-    return Row(
-      mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-      children: <Widget>[
-        key(Icons.arrow_back_ios_new, 'Back', AndroidKey.back),
-        key(Icons.circle_outlined, 'Home', AndroidKey.home),
-        key(Icons.crop_square, 'Recent apps', AndroidKey.appSwitch),
       ],
     );
   }

@@ -8,6 +8,7 @@ import android.Manifest
 import android.annotation.SuppressLint
 import android.content.Context
 import android.os.Build
+import android.telecom.PhoneAccountHandle
 import android.telephony.SubscriptionInfo
 import android.telephony.SubscriptionManager
 import android.telephony.TelephonyManager
@@ -64,6 +65,34 @@ object Sims {
         val telephony = context.getSystemService(TelephonyManager::class.java) ?: return false
         return runCatching { telephony.simState == TelephonyManager.SIM_STATE_READY }
             .getOrDefault(false)
+    }
+
+    /**
+     * Whether [sub] names a SIM this unit has, with [Config.SUB_DEFAULT]
+     * always allowed. An unreadable list says nothing either way, so it lets
+     * the request through for the radio to judge rather than refusing every
+     * explicit choice on a unit without `READ_PHONE_STATE`.
+     */
+    fun isKnown(context: Context, sub: Int): Boolean {
+        if (sub < 0) return true
+        val known = activeSubIds(context)
+        return known.isEmpty() || sub in known
+    }
+
+    /**
+     * The SIM behind a call's phone account, or [Config.SUB_DEFAULT] when
+     * there is no account or this Android cannot map one (before 11).
+     */
+    fun subIdOf(context: Context, account: PhoneAccountHandle?): Int {
+        if (account == null || Build.VERSION.SDK_INT < Build.VERSION_CODES.R) {
+            return Config.SUB_DEFAULT
+        }
+        val telephony = context.getSystemService(TelephonyManager::class.java)
+            ?: return Config.SUB_DEFAULT
+        return runCatching { telephony.getSubscriptionId(account) }
+            .getOrNull()
+            ?.takeIf { it != SubscriptionManager.INVALID_SUBSCRIPTION_ID }
+            ?: Config.SUB_DEFAULT
     }
 
     /** The subscription Android would use for an unqualified send. */

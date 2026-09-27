@@ -158,6 +158,7 @@ class GatewayEvent {
     required this.receivedAt,
     this.app,
     this.title,
+    this.sub,
   });
 
   factory GatewayEvent.fromJson(Map<String, dynamic> json) {
@@ -176,6 +177,10 @@ class GatewayEvent {
       receivedAt: _int(json['received_at']),
       app: _nullableString(json['app'] ?? raw['app']),
       title: _nullableString(json['title'] ?? raw['title']),
+      sub: switch (raw['sub']) {
+        final int sub when sub >= 0 => sub,
+        _ => null,
+      },
     );
   }
 
@@ -196,6 +201,10 @@ class GatewayEvent {
   /// A notification's app label and title; null for anything else.
   final String? app;
   final String? title;
+
+  /// The SIM a message or call used, when the unit said; null for anything
+  /// from a single-SIM unit, an older companion, or a notification.
+  final int? sub;
 
   /// When it happened: the device's [timestamp] is in milliseconds, the
   /// host's [receivedAt] in seconds and only a fallback.
@@ -218,7 +227,8 @@ class GatewayEvent {
       duration == other.duration &&
       receivedAt == other.receivedAt &&
       app == other.app &&
-      title == other.title;
+      title == other.title &&
+      sub == other.sub;
 
   @override
   int get hashCode => Object.hash(
@@ -233,7 +243,78 @@ class GatewayEvent {
     receivedAt,
     app,
     title,
+    sub,
   );
+}
+
+/// One SIM in a unit, as its companion app describes it.
+final class Sim {
+  const Sim({
+    required this.subId,
+    this.slot,
+    this.carrier = '',
+    this.label = '',
+    this.number = '',
+  });
+
+  factory Sim.fromJson(Map<String, dynamic> json) => Sim(
+    subId: _int(json['sub_id']) ?? -1,
+    slot: _int(json['slot']),
+    carrier: _string(json['carrier']),
+    label: _string(json['label']),
+    number: _string(json['number']),
+  );
+
+  /// Android's subscription id: what the gateway takes, and not the slot.
+  final int subId;
+
+  /// Zero-based tray position; null when the unit did not say.
+  final int? slot;
+  final String carrier;
+  final String label;
+  final String number;
+
+  /// "SIM 1 · Beeline": the tray number is what is written on the phone, the
+  /// carrier is what tells two SIMs apart at a glance.
+  String get name {
+    final position = slot;
+    final tray = position == null ? 'SIM' : 'SIM ${position + 1}';
+    final network = carrier.isNotEmpty ? carrier : label;
+    return network.isEmpty ? tray : '$tray · $network';
+  }
+
+  @override
+  bool operator ==(Object other) =>
+      other is Sim &&
+      subId == other.subId &&
+      slot == other.slot &&
+      carrier == other.carrier &&
+      label == other.label &&
+      number == other.number;
+
+  @override
+  int get hashCode => Object.hash(subId, slot, carrier, label, number);
+}
+
+/// A unit's SIMs and the one it uses when nobody chooses.
+final class UnitSims {
+  const UnitSims({required this.sims, this.defaultSub});
+
+  factory UnitSims.fromJson(Map<String, dynamic> json) => UnitSims(
+    defaultSub: _int(json['default_sub']),
+    sims: switch (json['sims']) {
+      final List<dynamic> entries =>
+        entries
+            .whereType<Map<String, dynamic>>()
+            .map(Sim.fromJson)
+            .where((sim) => sim.subId >= 0)
+            .toList(growable: false),
+      _ => const <Sim>[],
+    },
+  );
+
+  final List<Sim> sims;
+  final int? defaultSub;
 }
 
 /// One number from a unit's address book.

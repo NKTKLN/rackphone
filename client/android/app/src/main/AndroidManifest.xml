@@ -1,4 +1,7 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- Flutter declares this only in the debug and profile manifests, so a
+         release build without it cannot reach the gateway at all. -->
+    <uses-permission android:name="android.permission.INTERNET"/>
     <!-- Android 13 gates both arrival alerts and the foreground service's
          permanent explanation behind notification permission. -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>

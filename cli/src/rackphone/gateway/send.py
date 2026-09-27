@@ -10,6 +10,7 @@ from typing import Any
 from rackphone import units
 from rackphone.device import adb
 from rackphone.gateway.failures import DeviceBoundaryError
+from rackphone.gateway.sims import validate_sim
 
 DEFAULT_SEND_TIMEOUT_SECONDS = 60
 DESTINATION_PATTERN = re.compile(r"\+?[0-9]+\Z")
@@ -32,6 +33,7 @@ def send_sms(
     to: str,
     body: str,
     timeout: int = DEFAULT_SEND_TIMEOUT_SECONDS,
+    sim: int | None = None,
 ) -> dict[str, Any]:
     """Send one message and return the companion app's outbox record.
 
@@ -40,6 +42,7 @@ def send_sms(
         to: Destination containing digits and an optional leading plus.
         body: Message text to send.
         timeout: Seconds to wait for the device command.
+        sim: Subscription id to send from, or None for the unit's choice.
 
     Returns:
         dict[str, Any]: The device record plus an explicit acceptance flag.
@@ -55,13 +58,24 @@ def send_sms(
         raise SendError("message body must not be empty")
     if DESTINATION_PATTERN.fullmatch(to) is None:
         raise SendError("destination must contain digits and an optional leading +")
+    try:
+        validate_sim(sim)
+    except ValueError as exc:
+        raise SendError(str(exc)) from exc
 
     target = units.Unit.load(unit)
     try:
         serial = adb.resolve_serial(target.serial)
         output = adb.run_device_cli(
             serial,
-            ["action", COMPANION_PLUGIN, SEND_ACTION, to, body],
+            [
+                "action",
+                COMPANION_PLUGIN,
+                SEND_ACTION,
+                to,
+                body,
+                *([] if sim is None else [str(sim)]),
+            ],
             timeout=timeout,
         )
     except (adb.AdbError, subprocess.TimeoutExpired) as exc:
@@ -77,6 +91,10 @@ def send_sms(
         ) from exc
     if not isinstance(record, dict):
         raise _DeviceSendError(f"unit {unit!r} returned an invalid send response")
+    if record.get("error") == "unknown_sim":
+        # The request's fault, not the phone's: a 400 tells the client to
+        # refresh its SIM list rather than to retry.
+        raise SendError(f"unit {unit!r} has no SIM {sim}")
     if record.get("status") == "rejected" or "error" in record:
         raise _DeviceSendError(f"unit {unit!r} rejected the send")
     return {**record, "accepted": True}

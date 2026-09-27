@@ -10,6 +10,7 @@ from typing import Any
 from rackphone import units
 from rackphone.device import adb
 from rackphone.gateway.failures import DeviceBoundaryError
+from rackphone.gateway.sims import validate_sim
 
 DEFAULT_CALL_TIMEOUT_SECONDS = 30
 COMPANION_PLUGIN = "companion"
@@ -81,7 +82,10 @@ def reject_call(
 
 
 def dial_call(
-    unit: str, to: str, timeout: int = DEFAULT_CALL_TIMEOUT_SECONDS
+    unit: str,
+    to: str,
+    timeout: int = DEFAULT_CALL_TIMEOUT_SECONDS,
+    sim: int | None = None,
 ) -> dict[str, Any]:
     """Place a call from a unit.
 
@@ -89,6 +93,7 @@ def dial_call(
         unit: Name of the configured rack unit.
         to: Destination: digits and an optional leading plus.
         timeout: Seconds to wait for the device command.
+        sim: Subscription id to call from, or None for the unit's choice.
 
     Returns:
         dict[str, Any]: `status` "dialing", the number as the device placed it,
@@ -101,10 +106,18 @@ def dial_call(
     """
     if DESTINATION_PATTERN.fullmatch(to) is None:
         raise CallError("destination must contain digits and an optional leading +")
-    record = _run(unit, [DIAL_ACTION, to], timeout)
+    try:
+        validate_sim(sim)
+    except ValueError as exc:
+        raise CallError(str(exc)) from exc
+    record = _run(
+        unit, [DIAL_ACTION, to, *([] if sim is None else [str(sim)])], timeout
+    )
     status = record["status"]
     if status == "rejected" and record.get("error") == "busy":
         raise CallError("the unit is already on a call")
+    if status == "rejected" and record.get("error") == "unknown_sim":
+        raise CallError(f"unit {unit!r} has no SIM {sim}")
     if status != "dialing":
         raise _DeviceCallError(f"unit {unit!r} could not place the call")
     placed: dict[str, Any] = {
@@ -114,6 +127,8 @@ def dial_call(
     }
     if isinstance(record.get("placed_at"), int):
         placed["placed_at"] = record["placed_at"]
+    if isinstance(record.get("sub"), int) and record["sub"] >= 0:
+        placed["sub"] = record["sub"]
     return placed
 
 

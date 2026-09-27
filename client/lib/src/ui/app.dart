@@ -183,8 +183,9 @@ class _RackphoneAppState extends State<RackphoneApp> {
               session: widget.sessionController,
               onCall: _callController == null
                   ? null
-                  : (unit, address) =>
-                        unawaited(_callController?.dial(unit, address)),
+                  : (unit, address, {sim}) => unawaited(
+                      _callController?.dial(unit, address, sim: sim),
+                    ),
             ),
           ),
           SessionStatus.offline => _OfflinePage(

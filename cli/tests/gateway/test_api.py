@@ -192,8 +192,15 @@ class TestSending:
             lambda: [api.units.Unit("lisa01", tmp_path / "unit")],
         )
 
-        def succeed(unit: str, to: str, body: str) -> dict[str, object]:
-            assert (unit, to, body) == ("lisa01", "+7900", "do not audit this")
+        def succeed(
+            unit: str, to: str, body: str, sim: int | None = None
+        ) -> dict[str, object]:
+            assert (unit, to, body, sim) == (
+                "lisa01",
+                "+7900",
+                "do not audit this",
+                None,
+            )
             return {"accepted": True, "id": "out-1"}
 
         monkeypatch.setattr(api, "send_sms", succeed)
@@ -220,6 +227,41 @@ class TestSending:
         # both sides; it is the audit log that must not hold it.
         sent = populated_store.query_events(kind="sms", unit="lisa01")[0]
         assert (sent["body"], sent["direction"]) == (secret_body, "out")
+        auth_store.close()
+
+    def test_a_chosen_sim_reaches_the_unit_and_stays_with_the_message(
+        self,
+        populated_store: EventStore,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        config = GatewayConfig(api_token="legacy")
+        auth_store = AuthStore(tmp_path / "auth.db")
+        monkeypatch.setattr(
+            api.units,
+            "load_all_units",
+            lambda: [api.units.Unit("lisa01", tmp_path / "unit")],
+        )
+        chosen: list[int | None] = []
+
+        def succeed(
+            _unit: str, _to: str, _body: str, sim: int | None = None
+        ) -> dict[str, object]:
+            chosen.append(sim)
+            return {"accepted": True, "id": "out-1", "sub_id": 2}
+
+        monkeypatch.setattr(api, "send_sms", succeed)
+        with TestClient(
+            create_app(config, populated_store, LoginService(config, auth_store))
+        ) as client:
+            response = client.post(
+                "/api/messages",
+                json={"unit": "lisa01", "to": "+7900", "body": "hi", "sim": 2},
+                headers={"Authorization": "Bearer legacy"},
+            )
+        assert response.status_code == HTTP_OK
+        assert chosen == [2]
+        assert json.loads(response.json()["event"]["raw_json"])["sub"] == 2
         auth_store.close()
 
     def test_unknown_unit_is_not_found(
@@ -282,7 +324,9 @@ class TestSending:
             lambda: [api.units.Unit("lisa01", tmp_path / "unit")],
         )
 
-        def fail(_unit: str, _to: str, _body: str) -> dict[str, object]:
+        def fail(
+            _unit: str, _to: str, _body: str, **_kwargs: object
+        ) -> dict[str, object]:
             error = api.SendError("phone unavailable")
             error.device_failure = True
             raise error
@@ -592,7 +636,9 @@ class TestCallControl:
     ) -> Iterator[tuple[TestClient, AuthStore]]:
         (repo / "units" / "lisa01.env").write_text("")
         monkeypatch.setattr(
-            api, "dial_call", lambda _unit, to: {"status": "dialing", "to": to}
+            api,
+            "dial_call",
+            lambda _unit, to, **_kwargs: {"status": "dialing", "to": to},
         )
         monkeypatch.setattr(api, "end_call", lambda _unit: {"status": "ended"})
         monkeypatch.setattr(api, "send_dtmf", lambda *_args: {"status": "sent"})
