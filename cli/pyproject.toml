@@ -1,6 +1,6 @@
 [project]
 name = "rackphone"
-version = "0.1.0"
+version = "0.2.0"
 description = "Control CLI for Rackphone server units (LineageOS phones used as server hardware)."
 authors = [{ name = "NKTKLN", email = "nktkln@nktkln.com" }]
 readme = "README.md"

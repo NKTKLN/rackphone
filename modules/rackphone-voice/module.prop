@@ -1,6 +1,6 @@
 id=rackphone-voice
 name=Rackphone Voice
-version=v0.1.0
-versionCode=1
+version=v0.2.0
+versionCode=2
 author=nktkln
 description=One-call-at-a-time bidirectional PSTN audio bridge over an adb-forwarded abstract socket.

@@ -42,7 +42,7 @@ name: rackphone
 x-rackphone: &rackphone
   build:
     context: ./cli
-  image: rackphone:0.1.0
+  image: rackphone:0.2.0
   restart: unless-stopped
   network_mode: host
 
