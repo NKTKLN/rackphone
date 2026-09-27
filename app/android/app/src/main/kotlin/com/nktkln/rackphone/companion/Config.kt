@@ -42,6 +42,7 @@ class Config private constructor(private val prefs: SharedPreferences) {
         private const val KEY_RINGING_FROM = "ringing_from"
         private const val KEY_RINGING_SINCE = "ringing_since_ms"
         private const val KEY_CALL_ANSWERED = "call_answered_ms"
+        private const val KEY_RINGING_SUB = "ringing_sub"
         private const val KEY_SENT_OK = "counter_sent_ok"
         private const val KEY_SENT_FAILED = "counter_sent_failed"
         private const val KEY_REJECTED = "counter_rejected"
@@ -226,6 +227,15 @@ class Config private constructor(private val prefs: SharedPreferences) {
     var callAnsweredMs: Long
         get() = prefs.getLong(KEY_CALL_ANSWERED, 0L)
         set(value) = prefs.edit().putLong(KEY_CALL_ANSWERED, value).apply()
+
+    /**
+     * The SIM the ringing call came in on, or [SUB_DEFAULT] when unknown. Kept
+     * past the ringing broadcast, because the hang-up that logs the call
+     * arrives in a later one that may not carry it.
+     */
+    var ringingSub: Int
+        get() = prefs.getInt(KEY_RINGING_SUB, SUB_DEFAULT)
+        set(value) = prefs.edit().putInt(KEY_RINGING_SUB, value).apply()
 
     /** USSD code that reports the balance, or empty to never ask. */
     var balanceCode: String

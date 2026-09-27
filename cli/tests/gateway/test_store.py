@@ -97,6 +97,15 @@ class TestSent:
         assert (row["address"], row["body"]) == ("+7900", "on my way")
         assert store.query_events(kind="sms") == [row]
 
+    def test_the_sim_it_left_on_is_kept_with_it(self, store: EventStore) -> None:
+        # Where an arrival's SIM already is, so a client reads both the same way.
+        row = store.add_sent("lisa01", "+7900", "hi", 1_000, sub=2)
+        assert json.loads(row["raw_json"])["sub"] == 2
+
+    def test_an_unknown_sim_is_left_out(self, store: EventStore) -> None:
+        row = store.add_sent("lisa01", "+7900", "hi", 1_000)
+        assert "sub" not in json.loads(row["raw_json"])
+
     def test_two_sends_in_one_millisecond_are_two_rows(self, store: EventStore) -> None:
         first = store.add_sent("lisa01", "+7900", "one", 1_700_000_000_000)
         second = store.add_sent("lisa01", "+7900", "two", 1_700_000_000_000)

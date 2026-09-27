@@ -232,10 +232,10 @@ final class _FakeCallsApi implements GatewayCallsApi {
   int? placedAt;
 
   @override
-  Future<CallActionResult> dial(String unit, String to) async {
+  Future<CallActionResult> dial(String unit, String to, {int? sim}) async {
     final failure = dialFailure;
     if (failure != null) throw failure;
-    dialled.add('$unit $to');
+    dialled.add(sim == null ? '$unit $to' : '$unit $to sim$sim');
     return CallActionResult(
       status: 'dialing',
       accepted: true,

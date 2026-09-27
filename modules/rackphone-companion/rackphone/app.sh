@@ -33,6 +33,18 @@ app_cmd() {
     sed -n 's/^Broadcast completed: result=[0-9]*, data="\(.*\)"$/\1/p'
 }
 
+# sim_arg <value> - accept a subscription id, a non-negative integer. Checked
+# here as well as in the app so a typo is a usage error on the host, not a
+# message from whichever SIM the app falls back to.
+sim_arg() {
+  case "$1" in
+    '' | *[!0-9]*)
+      echo "sim must be a subscription id, not '$1'" >&2
+      return 1
+      ;;
+  esac
+}
+
 # app_status_value <key> - one field from the flat status the app writes.
 app_status_value() {
   sed -n "s/^$1=//p" "$APP_DATA/status.env" 2>/dev/null | tail -1

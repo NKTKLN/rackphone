@@ -229,3 +229,32 @@ def test_call_state_is_unknown_rather_than_idle(
 
     monkeypatch.setattr(adb, "run_exec_out", run)
     assert call_in_progress("lisa01") is None
+
+
+def test_dial_passes_the_chosen_sim_as_its_own_argument(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    seen = _device(
+        monkeypatch, tmp_path, {"status": "dialing", "to": "+7900", "sub": 2}
+    )
+    assert dial_call("lisa01", "+7900", sim=2)["sub"] == 2
+    assert seen == [["action", "companion", "dial", "+7900", "2"]]
+
+
+def test_dial_refuses_a_negative_sim_before_device_access(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    seen = _device(monkeypatch, tmp_path, {"status": "dialing"})
+    with pytest.raises(CallError, match="sim") as caught:
+        dial_call("lisa01", "+7900", sim=-1)
+    assert not caught.value.device_failure
+    assert seen == []
+
+
+def test_a_sim_the_unit_lacks_is_the_request_fault(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _device(monkeypatch, tmp_path, {"status": "rejected", "error": "unknown_sim"})
+    with pytest.raises(CallError, match="no SIM 7") as caught:
+        dial_call("lisa01", "+7900", sim=7)
+    assert not caught.value.device_failure

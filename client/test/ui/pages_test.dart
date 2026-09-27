@@ -7,6 +7,7 @@ import 'package:rackphone_client/src/api/models.dart';
 import 'package:rackphone_client/src/data/contact_book.dart';
 import 'package:rackphone_client/src/data/files_controller.dart';
 import 'package:rackphone_client/src/data/inbox_controller.dart';
+import 'package:rackphone_client/src/data/sim_book.dart';
 import 'package:rackphone_client/src/data/unit_status_controller.dart';
 import 'package:rackphone_client/src/screen/decoder.dart';
 import 'package:rackphone_client/src/screen/protocol.dart';
@@ -172,6 +173,58 @@ void main() {
       expect(find.text('on my way'), findsOneWidget);
       final field = tester.widget<TextField>(find.byType(TextField));
       expect(field.controller!.text, isEmpty);
+    });
+
+    testWidgets('a reply goes out on the SIM the conversation used', (
+      tester,
+    ) async {
+      final gateway =
+          FakeGateway(eventsValue: [event(1, address: '+7900', sub: 2)])
+            ..simsValue = const UnitSims(
+              sims: [
+                Sim(subId: 1, slot: 0, carrier: 'Beeline'),
+                Sim(subId: 2, slot: 1, carrier: 'MTS'),
+              ],
+              defaultSub: 1,
+            );
+      final (status: _, :inbox) = await _loaded(gateway);
+      final sims = SimBook(gateway: gateway, unit: 'lisa01');
+      await sims.load();
+      await tester.pumpWidget(
+        MaterialApp(
+          home: ThreadPage(inbox: inbox, address: '+7900', sims: sims),
+        ),
+      );
+
+      final mts = find.widgetWithText(ChoiceChip, 'SIM 2 · MTS');
+      expect(tester.widget<ChoiceChip>(mts).selected, isTrue);
+      await tester.enterText(find.byType(TextField), 'hi');
+      await tester.pump();
+      await tester.tap(find.byTooltip('Send'));
+      await tester.pump();
+      expect(gateway.sentSims, [2]);
+
+      await tester.tap(find.widgetWithText(ChoiceChip, 'SIM 1 · Beeline'));
+      await tester.pump();
+      await tester.enterText(find.byType(TextField), 'again');
+      await tester.pump();
+      await tester.tap(find.byTooltip('Send'));
+      await tester.pump();
+      expect(gateway.sentSims, [2, 1]);
+    });
+
+    testWidgets('one SIM shows no choice', (tester) async {
+      final gateway = FakeGateway(eventsValue: [event(1, address: '+7900')])
+        ..simsValue = const UnitSims(sims: [Sim(subId: 1, slot: 0)]);
+      final (status: _, :inbox) = await _loaded(gateway);
+      final sims = SimBook(gateway: gateway, unit: 'lisa01');
+      await sims.load();
+      await tester.pumpWidget(
+        MaterialApp(
+          home: ThreadPage(inbox: inbox, address: '+7900', sims: sims),
+        ),
+      );
+      expect(find.byType(ChoiceChip), findsNothing);
     });
 
     testWidgets('a failed send keeps the text and says why', (tester) async {
@@ -492,8 +545,10 @@ void main() {
               body: TextButton(
                 onPressed: () => Navigator.of(context).push(
                   MaterialPageRoute<void>(
-                    builder: (_) =>
-                        DialpadPage(unit: 'lisa01', onCall: called.add),
+                    builder: (_) => DialpadPage(
+                      unit: 'lisa01',
+                      onCall: (number, _) => called.add(number),
+                    ),
                   ),
                 ),
                 child: const Text('open'),
@@ -523,7 +578,10 @@ void main() {
       final called = <String>[];
       await tester.pumpWidget(
         MaterialApp(
-          home: DialpadPage(unit: 'lisa01', onCall: called.add),
+          home: DialpadPage(
+            unit: 'lisa01',
+            onCall: (number, _) => called.add(number),
+          ),
         ),
       );
       for (final key in ['*', '1', '0', '2', '#']) {

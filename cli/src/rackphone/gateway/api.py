@@ -79,6 +79,7 @@ from rackphone.gateway.session import (
     SessionManager,
     same_session,
 )
+from rackphone.gateway.sims import SimsError, read_sims
 from rackphone.gateway.store import (
     DEFAULT_QUERY_LIMIT,
     KIND_CALL,
@@ -137,6 +138,9 @@ class DialBody(BaseModel):
     """One outbound call request."""
 
     to: str
+    # A subscription id from the unit's SIM list; absent leaves the choice to
+    # the unit, which is what a single-SIM unit and an older client both want.
+    sim: int | None = None
 
 
 class DtmfBody(BaseModel):
@@ -151,6 +155,7 @@ class SendBody(BaseModel):
     unit: str
     to: str
     body: str
+    sim: int | None = None
 
 
 def client_ip(
@@ -713,6 +718,24 @@ def create_app(  # noqa: C901, PLR0913, PLR0915, PLR0917
         except ContactsError as exc:
             raise translate_device_error(exc) from exc
 
+    @app.get("/api/units/{unit}/sims", dependencies=read_auth)
+    def read_unit_sims(unit: str) -> dict[str, Any]:
+        """List a unit's SIMs, so a client can offer which one to use.
+
+        Args:
+            unit: Name of the configured rack unit.
+
+        Returns:
+            dict[str, Any]: `default_sub` and one entry per active SIM.
+        """
+        # Choosing a SIM is part of sending, so the capability that allows a
+        # send is the one that shows what it could be sent from.
+        require_unit(unit, "sms")
+        try:
+            return read_sims(unit)
+        except SimsError as exc:
+            raise translate_device_error(exc) from exc
+
     @app.get("/api/units/{unit}/telemetry", dependencies=read_auth)
     def read_telemetry(unit: str) -> dict[str, Any]:
         """Collect current summary telemetry for one unit.
@@ -995,7 +1018,7 @@ def create_app(  # noqa: C901, PLR0913, PLR0915, PLR0917
         if "sms" not in config.capabilities_for(body.unit):
             raise HTTPException(HTTPStatus.FORBIDDEN, "unit capability denied")
         try:
-            answer = send_sms(body.unit, body.to, body.body)
+            answer = send_sms(body.unit, body.to, body.body, sim=body.sim)
         except SendError as exc:
             raise translate_device_error(exc) from exc
         # An outbound message is billable and externally visible. Audit the
@@ -1012,6 +1035,7 @@ def create_app(  # noqa: C901, PLR0913, PLR0915, PLR0917
             str(answer.get("to") or body.to),
             body.body,
             queued if isinstance(queued, int) else int(time.time() * 1000),
+            sub=sent_sub if isinstance(sent_sub := answer.get("sub_id"), int) else None,
         )
         return {**answer, "event": event}
 
@@ -1042,7 +1066,7 @@ def create_app(  # noqa: C901, PLR0913, PLR0915, PLR0917
         """Place a call from a unit authorised for calls."""
         require_unit(unit, "calls")
         try:
-            outcome = dial_call(unit, body.to)
+            outcome = dial_call(unit, body.to, sim=body.sim)
         except CallError as exc:
             raise translate_device_error(exc) from exc
         # A placed call is billable and reaches a person, like a sent SMS.

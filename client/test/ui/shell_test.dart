@@ -94,7 +94,7 @@ void main() {
         theme: rackphoneTheme(),
         home: AppShell(
           session: session,
-          onCall: (unit, address) => placed.add('$unit $address'),
+          onCall: (unit, address, {sim}) => placed.add('$unit $address'),
         ),
       ),
     );
@@ -123,7 +123,7 @@ void main() {
     await tester.pumpWidget(
       MaterialApp(
         theme: rackphoneTheme(),
-        home: AppShell(session: session, onCall: (_, _) {}),
+        home: AppShell(session: session, onCall: (_, _, {sim}) {}),
       ),
     );
     await tester.pump();

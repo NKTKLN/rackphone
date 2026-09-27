@@ -74,6 +74,7 @@
                 <action android:name="com.nktkln.rackphone.companion.REJECT"/>
                 <action android:name="com.nktkln.rackphone.companion.CONTACTS"/>
                 <action android:name="com.nktkln.rackphone.companion.DIAL"/>
+                <action android:name="com.nktkln.rackphone.companion.SIMS"/>
                 <action android:name="com.nktkln.rackphone.companion.END"/>
                 <action android:name="com.nktkln.rackphone.companion.DTMF"/>
             </intent-filter>

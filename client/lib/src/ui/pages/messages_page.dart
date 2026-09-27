@@ -4,6 +4,8 @@ import '../../api/errors.dart';
 import '../../api/models.dart';
 import '../../data/contact_book.dart';
 import '../../data/inbox_controller.dart';
+import '../../data/sim_book.dart';
+import '../sim_picker.dart';
 import '../tiles.dart';
 import '../widgets.dart';
 
@@ -61,18 +63,30 @@ class ThreadPage extends StatefulWidget {
     required this.inbox,
     required this.address,
     this.contacts,
+    this.sims,
     super.key,
   });
 
   final InboxController inbox;
   final String address;
   final ContactBook? contacts;
+  final SimBook? sims;
 
   @override
   State<ThreadPage> createState() => _ThreadPageState();
 }
 
 class _ThreadPageState extends State<ThreadPage> {
+  /// What the operator picked; until then the conversation's own SIM.
+  int? _chosenSim;
+
+  int? get _sim =>
+      _chosenSim ??
+      widget.sims?.preferredFor(widget.address, <GatewayEvent>[
+        ...widget.inbox.messages,
+        ...widget.inbox.calls,
+      ]);
+
   @override
   void initState() {
     super.initState();
@@ -132,8 +146,20 @@ class _ThreadPageState extends State<ThreadPage> {
             },
           ),
         ),
-        if (widget.inbox.canSend && widget.address.isNotEmpty)
-          Composer(onSend: (body) => widget.inbox.send(widget.address, body)),
+        if (widget.inbox.canSend && widget.address.isNotEmpty) ...<Widget>[
+          ListenableBuilder(
+            listenable: widget.inbox,
+            builder: (context, _) => SimPicker(
+              book: widget.sims,
+              selected: _sim,
+              onSelected: (sim) => setState(() => _chosenSim = sim),
+            ),
+          ),
+          Composer(
+            onSend: (body) =>
+                widget.inbox.send(widget.address, body, sim: _sim),
+          ),
+        ],
       ],
     ),
   );
@@ -141,9 +167,16 @@ class _ThreadPageState extends State<ThreadPage> {
 
 /// Starts a conversation with a number, then carries on in its thread.
 class NewMessagePage extends StatefulWidget {
-  const NewMessagePage({required this.inbox, super.key});
+  const NewMessagePage({
+    required this.inbox,
+    this.contacts,
+    this.sims,
+    super.key,
+  });
 
   final InboxController inbox;
+  final ContactBook? contacts;
+  final SimBook? sims;
 
   @override
   State<NewMessagePage> createState() => _NewMessagePageState();
@@ -151,6 +184,15 @@ class NewMessagePage extends StatefulWidget {
 
 class _NewMessagePageState extends State<NewMessagePage> {
   final _to = TextEditingController();
+  int? _chosenSim;
+
+  /// A number already written to keeps its SIM; a new one gets the default.
+  int? get _sim =>
+      _chosenSim ??
+      widget.sims?.preferredFor(_to.text.trim(), <GatewayEvent>[
+        ...widget.inbox.messages,
+        ...widget.inbox.calls,
+      ]);
 
   @override
   void dispose() {
@@ -163,14 +205,18 @@ class _NewMessagePageState extends State<NewMessagePage> {
     if (!_destination.hasMatch(to)) {
       throw const FormatException('Enter a number: digits and an optional +.');
     }
-    final sent = await widget.inbox.send(to, body);
+    final sent = await widget.inbox.send(to, body, sim: _sim);
     if (!mounted) return;
     // The device may have normalised the number, and the thread is keyed by
     // what it stored, so follow the stored address rather than the typed one.
     await Navigator.of(context).pushReplacement(
       MaterialPageRoute<void>(
-        builder: (_) =>
-            ThreadPage(inbox: widget.inbox, address: sent.address ?? to),
+        builder: (_) => ThreadPage(
+          inbox: widget.inbox,
+          address: sent.address ?? to,
+          contacts: widget.contacts,
+          sims: widget.sims,
+        ),
       ),
     );
   }
@@ -203,10 +249,17 @@ class _NewMessagePageState extends State<NewMessagePage> {
                   selection: TextSelection.collapsed(offset: stripped.length),
                 );
               }
+              // The default follows the number being typed.
+              setState(() {});
             },
           ),
         ),
         const Spacer(),
+        SimPicker(
+          book: widget.sims,
+          selected: _sim,
+          onSelected: (sim) => setState(() => _chosenSim = sim),
+        ),
         Composer(onSend: _send),
       ],
     ),

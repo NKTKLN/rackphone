@@ -11,6 +11,7 @@ final class FakeGateway
         GatewayFilesApi,
         GatewayMessagingApi,
         GatewayContactsApi,
+        GatewaySimsApi,
         GatewayAdminApi {
   FakeGateway({
     List<RackUnit>? units,
@@ -32,6 +33,8 @@ final class FakeGateway
   final List<({String? kind, String? unit})> eventQueries = [];
   int cancelledStreams = 0;
   final List<({String unit, String to, String body})> sent = [];
+  final List<int?> sentSims = [];
+  UnitSims simsValue = const UnitSims(sims: <Sim>[]);
   List<Contact> contactsValue = const [];
   Object? contactsFailure;
   final List<bool> contactReads = [];
@@ -76,10 +79,19 @@ final class FakeGateway
   }
 
   @override
-  Future<GatewayEvent> sendMessage(String unit, String to, String body) async {
+  Future<UnitSims> sims(String unit) async => simsValue;
+
+  @override
+  Future<GatewayEvent> sendMessage(
+    String unit,
+    String to,
+    String body, {
+    int? sim,
+  }) async {
     final failure = sendFailure;
     if (failure != null) throw failure;
     sent.add((unit: unit, to: to, body: body));
+    sentSims.add(sim);
     return event(
       1000 + sent.length,
       unit: unit,
@@ -215,6 +227,7 @@ GatewayEvent event(
   String? body,
   String direction = 'in',
   int? duration,
+  int? sub,
 }) => GatewayEvent(
   id: id,
   unit: unit,
@@ -225,6 +238,7 @@ GatewayEvent event(
   direction: direction,
   duration: duration,
   receivedAt: 1700000100 + id,
+  sub: sub,
 );
 
 UnitTelemetry makeTelemetry({required bool up, String unit = 'lisa01'}) =>

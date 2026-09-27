@@ -3,6 +3,7 @@ package com.nktkln.rackphone.companion
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
+import android.telephony.SubscriptionManager
 import android.telephony.TelephonyManager
 import org.json.JSONObject
 import java.io.File
@@ -85,21 +86,42 @@ class CallReceiver : BroadcastReceiver() {
             // the outcome is logged against the right number.
             config.ringingFrom = from
             writeCurrentCall(context, from)
-            recordRinging(context, from, config.ringingSinceMs, callId(context))
+            recordRinging(context, from, config.ringingSinceMs, callId(context), config.ringingSub)
             return
         }
         if (!shouldRecordRinging(wasRinging, CallState.RINGING)) return
 
         val callId = correlatedCallId(callId(context), UUID.randomUUID().toString().take(12))
         persistCallId(context, callId)
+        val sub = ringingSub(context, intent)
         config.ringingFrom = from
         config.ringingSinceMs = now
         config.callAnsweredMs = 0L
+        config.ringingSub = sub
         writeCurrentCall(context, from)
-        recordRinging(context, from, now, callId)
+        recordRinging(context, from, now, callId, sub)
     }
 
-    private fun recordRinging(context: Context, from: String, since: Long, callId: String) {
+    /**
+     * Which SIM is ringing. The phone-state broadcast names it on a multi-SIM
+     * unit; failing that, the in-call service's call knows its account.
+     */
+    private fun ringingSub(context: Context, intent: Intent): Int {
+        val fromIntent = intent.getIntExtra(
+            SubscriptionManager.EXTRA_SUBSCRIPTION_INDEX,
+            Config.SUB_DEFAULT,
+        )
+        if (fromIntent >= 0) return fromIntent
+        return Sims.subIdOf(context, ActiveCall.current?.details?.accountHandle)
+    }
+
+    private fun recordRinging(
+        context: Context,
+        from: String,
+        since: Long,
+        callId: String,
+        sub: Int,
+    ) {
         Inbox.record(
             context,
             JSONObject()
@@ -107,7 +129,8 @@ class CallReceiver : BroadcastReceiver() {
                 .put("address", if (from == UNKNOWN_CALLER) "" else from)
                 .put("ts", since)
                 .put("direction", "ringing")
-                .put("call_id", callId),
+                .put("call_id", callId)
+                .put("sub", sub),
         )
         HostFiles.writeStatus(context)
     }
@@ -117,6 +140,8 @@ class CallReceiver : BroadcastReceiver() {
         val ringingSince = config.ringingSinceMs
         val answeredAt = config.callAnsweredMs
         val callId = callId(context)
+        val sub = config.ringingSub
+        config.ringingSub = Config.SUB_DEFAULT
         config.ringingFrom = ""
         config.ringingSinceMs = 0L
         config.callAnsweredMs = 0L
@@ -133,6 +158,7 @@ class CallReceiver : BroadcastReceiver() {
             .put("direction", if (answered) "in" else "missed")
             .put("duration", if (answered) (now - answeredAt) / 1000 else 0)
             .put("call_id", callId)
+            .put("sub", sub)
 
         Inbox.record(context, event)
         HostFiles.writeStatus(context)

@@ -99,9 +99,22 @@ class CommandReceiver : BroadcastReceiver() {
             }
 
             Commands.ACTION_DIAL -> {
-                val result = CallControl.dial(context, string(intent, Commands.EXTRA_TO).orEmpty())
+                val result = CallControl.dial(
+                    context,
+                    string(intent, Commands.EXTRA_TO).orEmpty(),
+                    int(intent, Commands.EXTRA_SUB) ?: Config.SUB_DEFAULT,
+                )
                 reply(result.optString("status") == "dialing", result)
             }
+
+            // Small enough for the reply itself, unlike the address book.
+            Commands.ACTION_SIMS -> reply(
+                true,
+                JSONObject()
+                    .put("status", "ok")
+                    .put("default_sub", Sims.defaultSubId())
+                    .put("sims", Sims.list(context)),
+            )
 
             Commands.ACTION_END -> {
                 val result = CallControl.end(context)
