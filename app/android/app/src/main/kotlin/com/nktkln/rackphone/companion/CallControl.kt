@@ -83,14 +83,22 @@ object CallControl {
         return result(CallOperation.REJECT, ringing, telecomEndCall(context))
     }
 
-    /** Place a call; Telecom hands it to [RackInCallService] once it starts. */
-    fun dial(context: Context, to: String): JSONObject {
+    /**
+     * Place a call; Telecom hands it to [RackInCallService] once it starts.
+     *
+     * @param sub the SIM to call from, or [Config.SUB_DEFAULT] for the unit's
+     *   own choice. A SIM the unit does not have is refused rather than
+     *   quietly swapped for another: the caller would see the wrong number.
+     */
+    fun dial(context: Context, to: String, sub: Int = Config.SUB_DEFAULT): JSONObject {
         val number = Numbers.sanitise(to) ?: return status("rejected", "invalid_destination")
         if (ActiveCall.current != null || isRinging(context)) return status("rejected", "busy")
         if (!HostFiles.granted(context, Manifest.permission.CALL_PHONE)) {
             return status("rejected", "permission_denied")
         }
-        val account = phoneAccountFor(context)
+        if (!Sims.isKnown(context, sub)) return status("rejected", "unknown_sim")
+        val wanted = subFor(context, sub)
+        val account = phoneAccountFor(context, wanted)
         val extras = Bundle().apply {
             if (account != null) putParcelable(TelecomManager.EXTRA_PHONE_ACCOUNT_HANDLE, account)
         }
@@ -102,7 +110,10 @@ object CallControl {
         // The unit's own clock, so the host can tell this call's hang-up record
         // from a late one left by the call before it.
         return if (placed) {
-            status("dialing").put("to", number).put("placed_at", System.currentTimeMillis())
+            status("dialing")
+                .put("to", number)
+                .put("placed_at", System.currentTimeMillis())
+                .put("sub", wanted)
         } else {
             status("failed")
         }
@@ -112,17 +123,13 @@ object CallControl {
      * The SIM a placed call goes out on, when there is a choice to make.
      *
      * With two SIMs and no default for calls, Telecom stops and asks on the
-     * unit's screen, which nobody is looking at, so the call just hangs. The
-     * configured SIM wins, then the one Android sends SMS from - the same rule
-     * a send follows, so one unit speaks with one number.
+     * unit's screen, which nobody is looking at, so the call just hangs.
      */
     @SuppressLint("MissingPermission")
-    private fun phoneAccountFor(context: Context): PhoneAccountHandle? {
+    private fun phoneAccountFor(context: Context, wanted: Int): PhoneAccountHandle? {
         val telecom = context.getSystemService(TelecomManager::class.java)
         val accounts = runCatching { telecom.callCapablePhoneAccounts }.getOrNull().orEmpty()
         if (accounts.size <= 1) return null
-        val configured = Config.of(context).subId
-        val wanted = if (configured >= 0) configured else Sims.defaultSubId()
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
             val telephony = context.getSystemService(TelephonyManager::class.java)
             accounts.firstOrNull {
@@ -130,6 +137,17 @@ object CallControl {
             }?.let { return it }
         }
         return accounts.first()
+    }
+
+    /**
+     * The SIM a call goes out on: the one asked for, then the configured one,
+     * then the one Android sends SMS from - the same rule a send follows, so a
+     * unit left to itself speaks with one number.
+     */
+    private fun subFor(context: Context, requested: Int): Int {
+        if (requested >= 0) return requested
+        val configured = Config.of(context).subId
+        return if (configured >= 0) configured else Sims.defaultSubId()
     }
 
     /** Hang up whatever call the unit has, ringing or not. */

@@ -59,6 +59,11 @@ object Sender {
             return reject(context, request, "permission_denied")
         }
         if (!Sims.hasActiveSim(context)) return reject(context, request, "no_sim")
+        // A SIM the unit does not have would fall back to the default one, and
+        // the message would go out from a number nobody chose.
+        if (!Sims.isKnown(context, request.subId)) {
+            return reject(context, request, "unknown_sim")
+        }
 
         // Resolve "let Android pick" to the subscription it would have picked,
         // so the outbox and the per-SIM keepalive clocks name a real SIM rather
