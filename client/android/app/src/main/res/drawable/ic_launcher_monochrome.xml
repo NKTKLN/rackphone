@@ -9,14 +9,22 @@
         android:scaleY="0.74"
         android:translateX="14.04"
         android:translateY="14.04">
-        <group
-            android:pivotX="44"
-            android:pivotY="51"
-            android:rotation="-12">
-            <path
-                android:pathData="M35,25H53A6,6 0 0 1 59,31V71A6,6 0 0 1 53,77H35A6,6 0 0 1 29,71V31A6,6 0 0 1 35,25Z"
-                android:strokeWidth="4"
-                android:strokeColor="#FFFFFFFF" />
+        <!-- A mask has one colour, so the front phone's screen cut-out would
+             show the back phone through it. Clip the back phone to everything
+             outside the front one, with a gap so the two do not merge. The
+             inner outline winds the other way, which makes it a hole. -->
+        <group>
+            <clip-path
+                android:pathData="M0,0H108V108H0Z M52,27A8,8 0 0 0 44,35V78A8,8 0 0 0 52,86H72A8,8 0 0 0 80,78V35A8,8 0 0 0 72,27Z" />
+            <group
+                android:pivotX="44"
+                android:pivotY="51"
+                android:rotation="-12">
+                <path
+                    android:pathData="M35,25H53A6,6 0 0 1 59,31V71A6,6 0 0 1 53,77H35A6,6 0 0 1 29,71V31A6,6 0 0 1 35,25Z"
+                    android:strokeWidth="4"
+                    android:strokeColor="#FFFFFFFF" />
+            </group>
         </group>
         <path
             android:fillColor="#FFFFFFFF"
