@@ -76,8 +76,14 @@ extension GatewayScreenApi on GatewayApi {
 /// Sending stays separate so lightweight gateway fakes that only read do not
 /// have to pretend to send.
 abstract interface class GatewayMessagingApi {
-  /// Sends one SMS and returns it as the gateway stored it.
-  Future<GatewayEvent> sendMessage(String unit, String to, String body);
+  /// Sends one SMS and returns it as the gateway stored it; [sim] is a
+  /// subscription id, null leaving the choice to the unit.
+  Future<GatewayEvent> sendMessage(
+    String unit,
+    String to,
+    String body, {
+    int? sim,
+  });
 }
 
 extension GatewayMessagingAccess on GatewayApi {
@@ -99,6 +105,18 @@ extension GatewayContactsAccess on GatewayApi {
   GatewayContactsApi? get addressBook {
     final gateway = this;
     return gateway is GatewayContactsApi ? gateway as GatewayContactsApi : null;
+  }
+}
+
+/// A unit's SIMs, separate for the same reason as sending.
+abstract interface class GatewaySimsApi {
+  Future<UnitSims> sims(String unit);
+}
+
+extension GatewaySimsAccess on GatewayApi {
+  GatewaySimsApi? get simCards {
+    final gateway = this;
+    return gateway is GatewaySimsApi ? gateway as GatewaySimsApi : null;
   }
 }
 
@@ -128,8 +146,8 @@ abstract interface class GatewayCallsApi {
   Future<CallActionResult> answerCall(String unit);
   Future<CallActionResult> rejectCall(String unit);
 
-  /// Places a call from [unit] to [to].
-  Future<CallActionResult> dial(String unit, String to);
+  /// Places a call from [unit] to [to], on the SIM [sim] names when given.
+  Future<CallActionResult> dial(String unit, String to, {int? sim});
 
   /// Ends whatever call [unit] has, ringing, dialling or connected.
   Future<CallActionResult> endCall(String unit);
@@ -156,6 +174,7 @@ class GatewayClient
         GatewayCallsApi,
         GatewayMessagingApi,
         GatewayContactsApi,
+        GatewaySimsApi,
         GatewayAdminApi {
   factory GatewayClient({
     required Uri baseUrl,
@@ -489,14 +508,33 @@ class GatewayClient
   }
 
   @override
-  Future<GatewayEvent> sendMessage(String unit, String to, String body) async {
+  Future<UnitSims> sims(String unit) async {
+    final response = await _authenticated(
+      () => http.Request(
+        'GET',
+        _uri('/api/units/${Uri.encodeComponent(unit)}/sims'),
+      ),
+    );
+    return UnitSims.fromJson(
+      _jsonObject(await response.stream.bytesToString()),
+    );
+  }
+
+  @override
+  Future<GatewayEvent> sendMessage(
+    String unit,
+    String to,
+    String body, {
+    int? sim,
+  }) async {
     final response = await _authenticated(
       () => http.Request('POST', _uri('/api/messages'))
         ..headers['Content-Type'] = 'application/json'
-        ..body = jsonEncode(<String, String>{
+        ..body = jsonEncode(<String, Object>{
           'unit': unit,
           'to': to,
           'body': body,
+          'sim': ?sim,
         }),
     );
     final answer = _jsonObject(await response.stream.bytesToString());
@@ -504,8 +542,8 @@ class GatewayClient
   }
 
   @override
-  Future<CallActionResult> dial(String unit, String to) =>
-      _callAction(unit, 'dial', {'to': to});
+  Future<CallActionResult> dial(String unit, String to, {int? sim}) =>
+      _callAction(unit, 'dial', {'to': to, 'sim': ?sim});
 
   @override
   Future<CallActionResult> endCall(String unit) => _callAction(unit, 'end');
@@ -517,7 +555,7 @@ class GatewayClient
   Future<CallActionResult> _callAction(
     String unit,
     String action, [
-    Map<String, String>? body,
+    Map<String, Object>? body,
   ]) async {
     final response = await _authenticated(() {
       final request = http.Request(

@@ -7,6 +7,7 @@ import '../api/models.dart';
 import '../data/contact_book.dart';
 import '../data/files_controller.dart';
 import '../data/inbox_controller.dart';
+import '../data/sim_book.dart';
 import '../data/unit_status_controller.dart';
 import '../screen/decoder.dart';
 import '../screen/screen_controller.dart';
@@ -37,7 +38,7 @@ class AppShell extends StatefulWidget {
   final SessionController session;
 
   /// Places a call from a unit; null when this device cannot carry one.
-  final void Function(String unit, String address)? onCall;
+  final void Function(String unit, String address, {int? sim})? onCall;
 
   /// Overrides the hardware-backed screen controller in tests.
   final ScreenController Function(GatewayApi gateway, String unit)?
@@ -52,6 +53,7 @@ class _AppShellState extends State<AppShell> {
   String? _unit;
   InboxController? _inbox;
   ContactBook? _contacts;
+  SimBook? _sims;
   UnitStatusController? _status;
   String? _screenStatus;
 
@@ -97,6 +99,11 @@ class _AppShellState extends State<AppShell> {
         _contacts = ContactBook(gateway: book, unit: unit.name);
         unawaited(_contacts!.load());
       }
+      final simCards = gateway.simCards;
+      if (simCards != null && unit.can('sms')) {
+        _sims = SimBook(gateway: simCards, unit: unit.name);
+        unawaited(_sims!.load());
+      }
     }
     if (!_available(_destination, unit)) _destination = Destination.home;
     if (mounted) setState(() {});
@@ -106,8 +113,10 @@ class _AppShellState extends State<AppShell> {
     _inbox?.dispose();
     _status?.dispose();
     _contacts?.dispose();
+    _sims?.dispose();
     _inbox = null;
     _contacts = null;
+    _sims = null;
     _status = null;
     _screenStatus = null;
   }
@@ -151,27 +160,50 @@ class _AppShellState extends State<AppShell> {
     if (inbox == null) return;
     await Navigator.of(context).push<void>(
       MaterialPageRoute<void>(
-        builder: (_) =>
-            ThreadPage(inbox: inbox, address: address, contacts: _contacts),
+        builder: (_) => ThreadPage(
+          inbox: inbox,
+          address: address,
+          contacts: _contacts,
+          sims: _sims,
+        ),
       ),
     );
   }
 
-  /// Calls from the selected unit, when it may and this device can.
-  ValueChanged<String>? get _caller {
+  /// What a number was last reached through, for choosing its SIM.
+  List<GatewayEvent> get _history => <GatewayEvent>[
+    ...?_inbox?.messages,
+    ...?_inbox?.calls,
+  ];
+
+  /// Places a call from the selected unit, when it may and this device can.
+  void Function(String address, int? sim)? get _dialer {
     final unit = widget.session.selectedUnit;
     final call = widget.onCall;
     if (unit == null || call == null || !unit.can('calls')) return null;
-    return (address) => call(unit.name, address);
+    return (address, sim) => call(unit.name, address, sim: sim);
+  }
+
+  /// Calls straight from a list, on the SIM the number last used: a tap on a
+  /// recent call is not the place to ask which SIM.
+  ValueChanged<String>? get _caller {
+    final dial = _dialer;
+    if (dial == null) return null;
+    return (address) => dial(address, _sims?.preferredFor(address, _history));
   }
 
   Future<void> _openDialpad() async {
     final unit = widget.session.selectedUnit;
-    final call = _caller;
-    if (unit == null || call == null) return;
+    final dial = _dialer;
+    if (unit == null || dial == null) return;
     await Navigator.of(context).push<void>(
       MaterialPageRoute<void>(
-        builder: (_) => DialpadPage(unit: unit.name, onCall: call),
+        builder: (_) => DialpadPage(
+          unit: unit.name,
+          onCall: dial,
+          sims: _sims,
+          history: _history,
+        ),
       ),
     );
   }
@@ -180,7 +212,10 @@ class _AppShellState extends State<AppShell> {
     final inbox = _inbox;
     if (inbox == null) return;
     await Navigator.of(context).push<void>(
-      MaterialPageRoute<void>(builder: (_) => NewMessagePage(inbox: inbox)),
+      MaterialPageRoute<void>(
+        builder: (_) =>
+            NewMessagePage(inbox: inbox, contacts: _contacts, sims: _sims),
+      ),
     );
   }
 

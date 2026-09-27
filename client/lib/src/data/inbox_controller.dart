@@ -128,12 +128,12 @@ final class InboxController extends ChangeNotifier {
 
   /// Sends one SMS and puts it in its conversation at once, rather than when
   /// the stream gets round to it; the stream's copy is the same id.
-  Future<GatewayEvent> send(String to, String body) async {
+  Future<GatewayEvent> send(String to, String body, {int? sim}) async {
     final messaging = gateway.messaging;
     if (messaging == null) {
       throw UnsupportedError('This gateway cannot send messages.');
     }
-    final sent = await messaging.sendMessage(unit, to, body);
+    final sent = await messaging.sendMessage(unit, to, body, sim: sim);
     _events[InboxKind.messages] = _boundedUnique(InboxKind.messages, [
       sent,
       ...messages,

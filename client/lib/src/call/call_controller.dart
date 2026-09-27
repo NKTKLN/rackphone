@@ -121,8 +121,9 @@ final class CallController extends ChangeNotifier {
     return placedAt != null && at != null && at < placedAt;
   }
 
-  /// Places a call from [unit] and bridges its audio once the unit dials.
-  Future<void> dial(String unit, String to) async {
+  /// Places a call from [unit], on [sim] when given, and bridges its audio
+  /// once the unit dials.
+  Future<void> dial(String unit, String to, {int? sim}) async {
     if (_state != CallState.idle && _state != CallState.ended) return;
     _unit = unit;
     _caller = to;
@@ -134,7 +135,7 @@ final class CallController extends ChangeNotifier {
     _startedAt = null;
     _setState(CallState.connecting);
     try {
-      _placedAt = (await gateway.dial(unit, to)).placedAt;
+      _placedAt = (await gateway.dial(unit, to, sim: sim)).placedAt;
       await _bridge(unit);
     } catch (failure, stackTrace) {
       _fail(failure, stackTrace);

@@ -151,4 +151,33 @@ void main() {
     expect(summary({'totp': 'disabled'}).totpEnabled, isFalse);
     expect(summary({}).totpEnabled, isFalse);
   });
+
+  test('an event carries the SIM its raw record names', () {
+    final event = GatewayEvent.fromJson(<String, dynamic>{
+      'id': 1,
+      'unit': 'lisa01',
+      'kind': 'sms',
+      'raw_json': '{"sub":2}',
+    });
+    expect(event.sub, 2);
+    final unknown = GatewayEvent.fromJson(<String, dynamic>{
+      'id': 2,
+      'unit': 'lisa01',
+      'kind': 'sms',
+      'raw_json': '{"sub":-1}',
+    });
+    expect(unknown.sub, isNull);
+  });
+
+  test('a SIM list drops entries without an id', () {
+    final sims = UnitSims.fromJson(<String, dynamic>{
+      'default_sub': 1,
+      'sims': [
+        {'sub_id': 1, 'slot': 0, 'carrier': 'Beeline'},
+        {'slot': 1},
+      ],
+    });
+    expect(sims.defaultSub, 1);
+    expect(sims.sims.single.name, 'SIM 1 · Beeline');
+  });
 }
