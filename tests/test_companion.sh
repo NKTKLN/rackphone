@@ -183,12 +183,37 @@ reset_app
 OUT=$(act dial 2>&1); CODE=$?
 assert_eq "dial without a number is a usage error" "$CODE" "2"
 reset_app
+OUT=$(STUB_AM_DATA='{"status":"dialing","to":"+7900","sub":2}' act dial '+7900' 2)
+assert_contains "a chosen SIM is an extra" "$(sent)" "--es sub 2"
+reset_app
+OUT=$(act dial '+7900' 'two' 2>&1); CODE=$?
+assert_eq "a SIM that is not an id is a usage error" "$CODE" "2"
+assert_not_contains "and nothing is placed" "$(sent)" "DIAL"
+reset_app
 OUT=$(STUB_AM_DATA='{"status":"ended"}' act end)
 assert_contains "END is broadcast" "$(sent)" "com.nktkln.rackphone.companion.END"
 reset_app
 OUT=$(STUB_AM_DATA='{"status":"sent","digits":2}' act dtmf '1#')
 assert_contains "DTMF is broadcast" "$(sent)" "com.nktkln.rackphone.companion.DTMF"
 assert_contains "the keys are an extra" "$(sent)" "--es digits 1#"
+
+section "Messages go out on the SIM asked for"
+reset_app
+OUT=$(STUB_AM_DATA='{"status":"queued","sub_id":2}' act send '+7900' 'hi' 2)
+assert_contains "SEND is broadcast" "$(sent)" "com.nktkln.rackphone.companion.SEND"
+assert_contains "the SIM is an extra" "$(sent)" "--es sub 2"
+reset_app
+OUT=$(STUB_AM_DATA='{"status":"queued","sub_id":1}' act send '+7900' 'hi')
+assert_not_contains "no SIM leaves the choice to the unit" "$(sent)" "--es sub"
+reset_app
+OUT=$(act send '+7900' 'hi' '-1' 2>&1); CODE=$?
+assert_eq "a negative SIM is a usage error" "$CODE" "2"
+
+section "The SIMs are listed through the app"
+reset_app
+OUT=$(STUB_AM_DATA='{"status":"ok","default_sub":1,"sims":[{"sub_id":1,"slot":0}]}' act sims)
+assert_contains "SIMS is broadcast" "$(sent)" "com.nktkln.rackphone.companion.SIMS"
+assert_contains "the list comes back" "$OUT" '"sub_id":1'
 
 section "The address book is exported through a file"
 reset_app

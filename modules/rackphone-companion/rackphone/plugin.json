@@ -147,6 +147,10 @@
       "label": "Place a call"
     },
     {
+      "id": "sims",
+      "label": "List the SIMs"
+    },
+    {
       "id": "end",
       "label": "End the current call"
     },
