@@ -96,6 +96,31 @@ class TestWritingSettings:
         assert main(["set", "battery.guard", "maybe"]) == EXIT_FAILURE
         assert "charge guard" in capsys.readouterr().out
 
+    @pytest.mark.parametrize(
+        "command",
+        [["set", "battery.max_percent", "70"], ["unset", "battery.max_percent"]],
+    )
+    def test_an_unwritable_unit_file_is_reported_not_raised(
+        self,
+        adopted_unit: units.Unit,
+        device: FakeDevice,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+        command: list[str],
+    ) -> None:
+        # A unit file copied into a volume keeps the owner it had on the host,
+        # which the container user cannot write. The device change has already
+        # happened by then, so it is reported rather than lost in a traceback.
+        def refuse(_unit: units.Unit) -> None:
+            raise PermissionError(13, "Permission denied", str(adopted_unit.path))
+
+        monkeypatch.setattr(units.Unit, "save", refuse)
+        assert main(command) == EXIT_FAILURE
+        assert command in device.commands
+        out = capsys.readouterr().out
+        assert "lisa01.env could not be written: Permission denied" in out
+        assert "next deploy will revert it" in out
+
     @pytest.mark.usefixtures("device", "repo")
     def test_an_unadopted_device_says_the_change_is_not_tracked(
         self, capsys: pytest.CaptureFixture[str]

@@ -156,7 +156,11 @@ def set_setting(args: argparse.Namespace) -> int:
 
     # Keep the repo in step with the hardware, so the next deploy does not
     # quietly revert a change made here.
-    if record_setting(target.unit_name, f"{plugin_id}.{key}", value):
+    try:
+        recorded = record_setting(target.unit_name, f"{plugin_id}.{key}", value)
+    except OSError as exc:
+        return _not_recorded(target.unit_name, exc)
+    if recorded:
         render.dim(f"  recorded in {target.unit_name}.env")
     else:
         render.dim("  (unit not adopted; change is live but not tracked in the repo)")
@@ -176,8 +180,32 @@ def unset_setting(args: argparse.Namespace) -> int:
     plugin_id, key = split_setting_key(args.key)
     adb.run_device_cli(target.serial, ["unset", f"{plugin_id}.{key}"])
     render.ok(f"cleared {plugin_id}.{key}")
-    forget_setting(target.unit_name, f"{plugin_id}.{key}")
+    try:
+        forget_setting(target.unit_name, f"{plugin_id}.{key}")
+    except OSError as exc:
+        return _not_recorded(target.unit_name, exc)
     return EXIT_OK
+
+
+def _not_recorded(unit_name: str, exc: OSError) -> int:
+    """Report a device change that the unit file could not follow.
+
+    Args:
+        unit_name: Unit whose file could not be written.
+        exc: Why the write failed.
+
+    Returns:
+        The command exit code.
+    """
+    # The device already has the change, so this is not a failure to undo -
+    # but it is not a success either: the file still holds the old state, and
+    # the next deploy puts it back.
+    render.warn(
+        f"  the change is live, but {unit_name}.env could not be written: "
+        f"{exc.strerror or exc}"
+    )
+    render.dim("  the next deploy will revert it until the unit file is writable")
+    return EXIT_FAILURE
 
 
 def run_action(args: argparse.Namespace) -> int:
