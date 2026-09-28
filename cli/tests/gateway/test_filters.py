@@ -98,7 +98,9 @@ class TestMatching:
     def test_a_missing_sender_matches_no_sender_rule(
         self, make_event: EventFactory
     ) -> None:
-        assert rule().matches_event(make_event(address=None)) is False
+        # Every other condition matches, so only the sender can refuse it.
+        event = make_event(address=None, body=BEELINE_BODY)
+        assert rule().matches_event(event) is False
 
     def test_a_disabled_rule_keeps_its_conditions_but_matches_nothing(
         self, make_event: EventFactory

@@ -8,6 +8,7 @@ allowed to reach the forwarder.
 from __future__ import annotations
 
 import json
+import threading
 
 import httpx
 import pytest
@@ -418,3 +419,241 @@ class TestOutageAlerts:
         now[0] = 7_601
         gateway.run_once()
         assert len(pushed) == 2
+
+
+class TestCounters:
+    """The API reports these as running totals, not as the last pass."""
+
+    @staticmethod
+    def events() -> list[Event]:
+        events = [Event.from_spool_line("lisa01", SPOOL_LINE)]
+        events.append(Event.from_spool_line("lisa01", SECOND_LINE))
+        return [event for event in events if event is not None]
+
+    @staticmethod
+    def gateway(
+        store: EventStore, handler: httpx.MockTransport, **config: object
+    ) -> MessageGateway:
+        return MessageGateway(
+            GatewayConfig(ntfy=NTFY_CONFIG, **config),  # type: ignore[arg-type]
+            store,
+            make_forwarder(handler),
+            clock=lambda: 1_000,
+        )
+
+    @pytest.mark.usefixtures("device_calls", "repo")
+    def test_drain_counters_accumulate(self, store: EventStore) -> None:
+        unit = units.create_unit("lisa01", "AAA")
+        gateway = MessageGateway(GatewayConfig(), store)
+        gateway.drain_unit(unit)
+        gateway.drain_unit(unit)
+        # The redelivered line is drained again but not stored again.
+        assert (gateway.stats.drained, gateway.stats.stored) == (2, 1)
+
+    def test_push_counters_accumulate(self, store: EventStore) -> None:
+        pushed: list[httpx.Request] = []
+        gateway = self.gateway(
+            store, httpx.MockTransport(lambda request: _record(pushed, request))
+        )
+        gateway._forward("lisa01", self.events())
+        assert gateway.stats.pushed == 2
+        assert len(pushed) == 2
+
+    def test_failed_pushes_accumulate(self, store: EventStore) -> None:
+        gateway = self.gateway(
+            store, httpx.MockTransport(lambda _request: httpx.Response(403))
+        )
+        gateway._forward("lisa01", self.events())
+        assert gateway.stats.push_failed == 2
+
+    def test_filtered_events_accumulate(self, store: EventStore) -> None:
+        pushed: list[httpx.Request] = []
+        gateway = self.gateway(
+            store,
+            httpx.MockTransport(lambda request: _record(pushed, request)),
+            filters=load_rules([{"name": "quiet", "kind": "sms"}]),
+        )
+        gateway._forward("lisa01", self.events())
+        assert gateway.stats.filtered == 2
+        assert pushed == []
+
+    def test_presence_skips_accumulate(self, store: EventStore) -> None:
+        presence = ClientPresence()
+        presence.opened()
+        gateway = self.gateway(
+            store, httpx.MockTransport(lambda _request: pytest.fail("pushed"))
+        )
+        gateway.presence = presence
+        gateway._forward("lisa01", self.events())
+        assert gateway.stats.presence_skipped == 2
+
+    def test_an_outgoing_event_does_not_stop_the_rest(self, store: EventStore) -> None:
+        pushed: list[httpx.Request] = []
+        placed = json.dumps(
+            {"kind": "call", "id": 7, "address": "+1", "direction": "out"}
+        )
+        outgoing = Event.from_spool_line("lisa01", placed)
+        assert outgoing is not None
+        gateway = self.gateway(
+            store, httpx.MockTransport(lambda request: _record(pushed, request))
+        )
+        gateway._forward("lisa01", [outgoing, *self.events()])
+        assert len(pushed) == 2
+
+    @pytest.mark.usefixtures("repo")
+    def test_totals_and_errors_add_up_across_units(
+        self, store: EventStore, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        for name, serial in [("a", "AAA"), ("b", "BBB"), ("c", "CCC"), ("d", "DDD")]:
+            units.create_unit(name, serial)
+
+        def run(serial: str, arguments: list[str], **_kwargs: object) -> str:
+            if serial in {"CCC", "DDD"}:
+                raise adb.AdbError("device offline")
+            return SPOOL_LINE + "\n" if arguments[-1] == "drain" else ""
+
+        monkeypatch.setattr(adb, "resolve_serial", lambda serial: serial)
+        monkeypatch.setattr(adb, "run_device_cli", run)
+        gateway = MessageGateway(GatewayConfig(), store)
+        assert gateway.run_once() == 2
+        assert gateway.stats.errors == 2
+
+
+class TestForwardingPolicy:
+    def test_a_matching_allow_rule_still_pushes(self, store: EventStore) -> None:
+        pushed: list[httpx.Request] = []
+        event = Event.from_spool_line("lisa01", SPOOL_LINE)
+        assert event is not None
+        gateway = MessageGateway(
+            GatewayConfig(
+                ntfy=NTFY_CONFIG,
+                filters=load_rules(
+                    [{"name": "keep", "mode": "allow", "kind": "sms", "sender": "+1"}]
+                ),
+            ),
+            store,
+            make_forwarder(httpx.MockTransport(lambda r: _record(pushed, r))),
+        )
+        gateway._forward("lisa01", [event])
+        assert len(pushed) == 1
+        assert gateway.stats.filtered == 0
+
+    def test_nothing_is_pushed_while_ntfy_is_unconfigured(
+        self, store: EventStore
+    ) -> None:
+        event = Event.from_spool_line("lisa01", SPOOL_LINE)
+        assert event is not None
+        gateway = MessageGateway(
+            GatewayConfig(),
+            store,
+            make_forwarder(httpx.MockTransport(lambda _r: pytest.fail("pushed"))),
+        )
+        gateway._forward("lisa01", [event])
+        assert gateway.stats.pushed == 0
+
+    @pytest.mark.usefixtures("repo")
+    def test_skipped_spool_lines_are_counted_in_the_warning(
+        self,
+        store: EventStore,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        spool = f"not json\n{SPOOL_LINE}\n{SECOND_LINE}\n"
+        monkeypatch.setattr(adb, "resolve_serial", lambda serial: serial or "AAA")
+        monkeypatch.setattr(
+            adb,
+            "run_device_cli",
+            lambda _s, arguments, **_k: spool if arguments[-1] == "drain" else "",
+        )
+        MessageGateway(GatewayConfig(), store).drain_unit(
+            units.create_unit("lisa01", "AAA")
+        )
+        assert "skipped 1 unparseable" in capsys.readouterr().out
+
+
+class TestOutageBoundaries:
+    @staticmethod
+    def offline_gateway(
+        store: EventStore,
+        monkeypatch: pytest.MonkeyPatch,
+        now: list[int],
+        handler: httpx.MockTransport,
+    ) -> MessageGateway:
+        monkeypatch.setattr(adb, "resolve_serial", lambda serial: serial or "AAA")
+
+        def offline(_serial: str, _arguments: list[str], **_kwargs: object) -> str:
+            raise adb.AdbError("offline")
+
+        monkeypatch.setattr(adb, "run_device_cli", offline)
+        return MessageGateway(
+            GatewayConfig(ntfy=NTFY_CONFIG),
+            store,
+            make_forwarder(handler),
+            clock=lambda: now[0],
+        )
+
+    @pytest.mark.usefixtures("repo")
+    def test_the_alert_fires_at_exactly_an_hour(
+        self, store: EventStore, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        pushed: list[httpx.Request] = []
+        now = [1_000]
+        units.create_unit("lisa01", "AAA")
+        gateway = self.offline_gateway(
+            store, monkeypatch, now, httpx.MockTransport(lambda r: _record(pushed, r))
+        )
+        gateway.run_once()
+        now[0] = 4_599
+        gateway.run_once()
+        assert pushed == []
+        now[0] = 4_600
+        gateway.run_once()
+        assert len(pushed) == 1
+
+    @pytest.mark.usefixtures("repo")
+    def test_an_hour_is_counted_from_the_last_success(
+        self, store: EventStore, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        pushed: list[httpx.Request] = []
+        now = [5_000]
+        units.create_unit("lisa01", "AAA")
+        gateway = self.offline_gateway(
+            store, monkeypatch, now, httpx.MockTransport(lambda r: _record(pushed, r))
+        )
+        gateway._last_success["lisa01"] = 5_000
+        now[0] = 5_001
+        gateway.run_once()
+        assert pushed == []
+
+    @pytest.mark.usefixtures("repo")
+    def test_failed_alerts_are_counted_per_unit(
+        self, store: EventStore, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        now = [0]
+        units.create_unit("a", "AAA")
+        units.create_unit("b", "BBB")
+        gateway = self.offline_gateway(
+            store,
+            monkeypatch,
+            now,
+            httpx.MockTransport(lambda _request: httpx.Response(403)),
+        )
+        gateway.run_once()
+        now[0] = 3_600
+        gateway.run_once()
+        assert gateway.stats.push_failed == 2
+
+
+def test_the_background_thread_runs_the_loop(store: EventStore) -> None:
+    gateway = MessageGateway(GatewayConfig(poll_seconds=0.01), store)
+    ran = threading.Event()
+
+    def run_forever() -> None:
+        ran.set()
+
+    gateway.run_forever = run_forever  # type: ignore[method-assign]
+    thread = gateway.start_in_background()
+    thread.join(timeout=5)
+    assert ran.is_set()
+    assert thread.name == "rackphone-gateway"
+    assert thread.daemon is True

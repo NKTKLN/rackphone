@@ -342,3 +342,116 @@ class TestInventoryCommands:
         connected_devices.append(adb.Device("AAA", "device"))
         assert main(["devices"]) == EXIT_OK
         assert "lisa01" in capsys.readouterr().out
+
+
+def unit_states(out: str) -> dict[str, str]:
+    """Read each unit's STATE column back out of the rendered table."""
+    states: dict[str, str] = {}
+    for line in out.splitlines():
+        words = line.replace("│", " ").split()
+        for state in ("online", "offline"):
+            if state in words:
+                states[words[0]] = state
+    return states
+
+
+class TestUnitStates:
+    @pytest.mark.usefixtures("repo")
+    def test_a_unit_is_online_only_while_its_serial_is_usable(
+        self, connected_devices: list[adb.Device], capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        units.create_unit("present", "AAA")
+        units.create_unit("absent", "BBB")
+        units.create_unit("halfway", "CCC")
+        connected_devices.extend(
+            [adb.Device("AAA", "device"), adb.Device("CCC", "unauthorized")]
+        )
+        assert main(["units"]) == EXIT_OK
+        assert unit_states(capsys.readouterr().out) == {
+            "present": "online",
+            "absent": "offline",
+            "halfway": "offline",
+        }
+
+    @pytest.mark.usefixtures("repo")
+    def test_a_unit_without_a_serial_follows_the_single_attached_device(
+        self, connected_devices: list[adb.Device], capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        # A blank serial means "whichever one phone is plugged in", so it is
+        # online with exactly one device and ambiguous - offline - with two.
+        units.create_unit("auto", "")
+        connected_devices.append(adb.Device("AAA", "device"))
+        assert main(["units"]) == EXIT_OK
+        assert unit_states(capsys.readouterr().out) == {"auto": "online"}
+
+        connected_devices.append(adb.Device("BBB", "device"))
+        assert main(["units"]) == EXIT_OK
+        assert unit_states(capsys.readouterr().out) == {"auto": "offline"}
+
+
+class TestGatewayHelpers:
+    def test_alerts_go_to_the_forwarder_and_its_failures_are_contained(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        from rackphone.cli.commands import gateway  # noqa: PLC0415 - loaded lazily
+        from rackphone.gateway.notify import NtfyError  # noqa: PLC0415
+
+        sent: list[tuple[str, str]] = []
+
+        class Forwarder:
+            def send_alert(self, reason: str, message: str) -> None:
+                sent.append((reason, message))
+                if reason == "broken":
+                    raise NtfyError("refused")
+
+        alert = gateway._alert_callback(Forwarder())  # type: ignore[arg-type]
+        alert("new_device", "A login succeeded.")
+        alert("broken", "Never arrives.")
+        assert sent == [
+            ("new_device", "A login succeeded."),
+            ("broken", "Never arrives."),
+        ]
+        assert "ntfy system alert failed" in capsys.readouterr().out
+
+        # Without a forwarder there is nowhere to send, and that is not an error.
+        gateway._alert_callback(None)("new_device", "A login succeeded.")
+
+    @pytest.mark.usefixtures("repo")
+    def test_a_single_drain_fails_when_a_unit_could_not_be_reached(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        units.create_unit("lisa01", "AAA")
+
+        def offline(*_args: object, **_kwargs: object) -> str:
+            raise adb.AdbError("device offline")
+
+        monkeypatch.setattr(adb, "resolve_serial", lambda serial: serial or "AAA")
+        monkeypatch.setattr(adb, "run_device_cli", offline)
+        monkeypatch.setenv("RACKPHONE_GATEWAY_CONFIG", str(tmp_path / "none.toml"))
+        monkeypatch.setenv("RACKPHONE_DB_PATH", str(tmp_path / "messages.db"))
+        assert main(["gateway", "--once"]) == EXIT_FAILURE
+
+    @pytest.mark.usefixtures("repo")
+    def test_gwconfig_shows_which_filters_are_switched_off(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        config_file = tmp_path / "gateway.toml"
+        config_file.write_text(
+            '[[filters]]\nname="live"\nkind="sms"\n\n'
+            '[[filters]]\nname="paused"\nkind="call"\nenabled=false\n'
+        )
+        monkeypatch.setenv("RACKPHONE_GATEWAY_CONFIG", str(config_file))
+
+        assert main(["gwconfig"]) == EXIT_OK
+        rows = {
+            words[0]: words[1]
+            for line in capsys.readouterr().out.splitlines()
+            if (words := line.replace("│", " ").split())
+            and words[0] in {"live", "paused"}
+        }
+        assert rows == {"live": "on", "paused": "off"}

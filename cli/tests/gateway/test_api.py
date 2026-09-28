@@ -784,6 +784,13 @@ def test_client_ip_uses_only_a_trusted_peer() -> None:
     assert client_ip("proxy", "198.51.100.1, 192.0.2.1", trusted) == "192.0.2.1"
     assert client_ip("stranger", "192.0.2.1", trusted) == "stranger"
     assert client_ip("proxy", "", trusted) == "proxy"
+    # A caller can invent any number of hops, not just one; only the last
+    # entry, the one the proxy itself appended, is believed.
+    assert (
+        client_ip("proxy", "10.0.0.1, 198.51.100.1,192.0.2.1", trusted) == "192.0.2.1"
+    )
+    assert client_ip("proxy", "192.0.2.1", trusted) == "192.0.2.1"
+    assert client_ip("proxy", "198.51.100.1, ", trusted) == "proxy"
 
 
 def test_a_unit_that_may_only_report_notifications_keeps_its_feed(
