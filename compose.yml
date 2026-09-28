@@ -11,6 +11,12 @@
 #
 #   docker compose cp ./units/. gateway:/repo/units/
 #   docker compose cp ./gateway.toml gateway:/config/gateway.toml
+#   docker compose exec -u root gateway chown -R rackphone:rackphone /repo/units
+#
+# The chown is not optional. `cp` keeps the owner the files had on this side,
+# and the containers run as their own user, so without it `rackphone set`
+# changes the phone but cannot record the change - and the next deploy
+# reverts it.
 #
 # or, equivalently, by adopting the phone from inside the container:
 #
