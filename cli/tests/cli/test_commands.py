@@ -96,6 +96,31 @@ class TestWritingSettings:
         assert main(["set", "battery.guard", "maybe"]) == EXIT_FAILURE
         assert "charge guard" in capsys.readouterr().out
 
+    @pytest.mark.parametrize(
+        "command",
+        [["set", "battery.max_percent", "70"], ["unset", "battery.max_percent"]],
+    )
+    def test_an_unwritable_unit_file_is_reported_not_raised(
+        self,
+        adopted_unit: units.Unit,
+        device: FakeDevice,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+        command: list[str],
+    ) -> None:
+        # A unit file copied into a volume keeps the owner it had on the host,
+        # which the container user cannot write. The device change has already
+        # happened by then, so it is reported rather than lost in a traceback.
+        def refuse(_unit: units.Unit) -> None:
+            raise PermissionError(13, "Permission denied", str(adopted_unit.path))
+
+        monkeypatch.setattr(units.Unit, "save", refuse)
+        assert main(command) == EXIT_FAILURE
+        assert command in device.commands
+        out = capsys.readouterr().out
+        assert "lisa01.env could not be written: Permission denied" in out
+        assert "next deploy will revert it" in out
+
     @pytest.mark.usefixtures("device", "repo")
     def test_an_unadopted_device_says_the_change_is_not_tracked(
         self, capsys: pytest.CaptureFixture[str]
@@ -288,12 +313,12 @@ class TestGatewayCommands:
         capsys: pytest.CaptureFixture[str],
     ) -> None:
         config_file = tmp_path / "gateway.toml"
-        config_file.write_text('[ntfy]\nurl="https://n.example"\npassword="hunter2"\n')
+        config_file.write_text('[admin]\nusername="ops"\npassword_hash="hunter2"\n')
         monkeypatch.setenv("RACKPHONE_GATEWAY_CONFIG", str(config_file))
 
         assert main(["gwconfig"]) == EXIT_OK
         out = capsys.readouterr().out
-        assert "n.example" in out
+        assert "ops" in out
         assert "hunter2" not in out
 
     @pytest.mark.usefixtures("adopted_unit")
@@ -313,8 +338,6 @@ class TestGatewayCommands:
         assert main(["gateway", "--once"]) == EXIT_OK
         out = capsys.readouterr().out
         assert "1 new" in out
-        # Without ntfy configured the events are stored but never leave.
-        assert "not pushed" in out
 
 
 def test_the_schema_fixture_matches_what_the_device_reports() -> None:
@@ -342,3 +365,100 @@ class TestInventoryCommands:
         connected_devices.append(adb.Device("AAA", "device"))
         assert main(["devices"]) == EXIT_OK
         assert "lisa01" in capsys.readouterr().out
+
+
+def unit_states(out: str) -> dict[str, str]:
+    """Read each unit's STATE column back out of the rendered table."""
+    states: dict[str, str] = {}
+    for line in out.splitlines():
+        words = line.replace("│", " ").split()
+        for state in ("online", "offline"):
+            if state in words:
+                states[words[0]] = state
+    return states
+
+
+class TestUnitStates:
+    @pytest.mark.usefixtures("repo")
+    def test_a_unit_is_online_only_while_its_serial_is_usable(
+        self, connected_devices: list[adb.Device], capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        units.create_unit("present", "AAA")
+        units.create_unit("absent", "BBB")
+        units.create_unit("halfway", "CCC")
+        connected_devices.extend(
+            [adb.Device("AAA", "device"), adb.Device("CCC", "unauthorized")]
+        )
+        assert main(["units"]) == EXIT_OK
+        assert unit_states(capsys.readouterr().out) == {
+            "present": "online",
+            "absent": "offline",
+            "halfway": "offline",
+        }
+
+    @pytest.mark.usefixtures("repo")
+    def test_a_unit_without_a_serial_follows_the_single_attached_device(
+        self, connected_devices: list[adb.Device], capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        # A blank serial means "whichever one phone is plugged in", so it is
+        # online with exactly one device and ambiguous - offline - with two.
+        units.create_unit("auto", "")
+        connected_devices.append(adb.Device("AAA", "device"))
+        assert main(["units"]) == EXIT_OK
+        assert unit_states(capsys.readouterr().out) == {"auto": "online"}
+
+        connected_devices.append(adb.Device("BBB", "device"))
+        assert main(["units"]) == EXIT_OK
+        assert unit_states(capsys.readouterr().out) == {"auto": "offline"}
+
+
+class TestGatewayHelpers:
+    def test_security_alerts_are_written_to_the_log(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        from rackphone.cli.commands import gateway  # noqa: PLC0415 - loaded lazily
+
+        gateway._log_alert("new_device", "A login succeeded.")
+        assert "security alert (new_device): A login succeeded." in (
+            capsys.readouterr().out
+        )
+
+    @pytest.mark.usefixtures("repo")
+    def test_a_single_drain_fails_when_a_unit_could_not_be_reached(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        units.create_unit("lisa01", "AAA")
+
+        def offline(*_args: object, **_kwargs: object) -> str:
+            raise adb.AdbError("device offline")
+
+        monkeypatch.setattr(adb, "resolve_serial", lambda serial: serial or "AAA")
+        monkeypatch.setattr(adb, "run_device_cli", offline)
+        monkeypatch.setenv("RACKPHONE_GATEWAY_CONFIG", str(tmp_path / "none.toml"))
+        monkeypatch.setenv("RACKPHONE_DB_PATH", str(tmp_path / "messages.db"))
+        assert main(["gateway", "--once"]) == EXIT_FAILURE
+
+    @pytest.mark.usefixtures("repo")
+    def test_gwconfig_shows_which_filters_are_switched_off(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        config_file = tmp_path / "gateway.toml"
+        config_file.write_text(
+            '[[filters]]\nname="live"\nkind="sms"\n\n'
+            '[[filters]]\nname="paused"\nkind="call"\nenabled=false\n'
+        )
+        monkeypatch.setenv("RACKPHONE_GATEWAY_CONFIG", str(config_file))
+
+        assert main(["gwconfig"]) == EXIT_OK
+        rows = {
+            words[0]: words[1]
+            for line in capsys.readouterr().out.splitlines()
+            if (words := line.replace("│", " ").split())
+            and words[0] in {"live", "paused"}
+        }
+        assert rows == {"live": "on", "paused": "off"}

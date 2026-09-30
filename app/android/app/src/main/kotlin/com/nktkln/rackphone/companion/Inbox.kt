@@ -14,7 +14,7 @@ import java.io.File
  * The host absorbs the duplicate with a UNIQUE constraint, because a duplicate
  * notification is an annoyance and a dropped SMS is invisible.
  *
- * The app decides nothing about what happens next. It has no ntfy credential,
+ * The app decides nothing about what happens next. It has no push credential,
  * no store and no policy: it collects, and the host relays.
  */
 object Inbox {

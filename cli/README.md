@@ -18,7 +18,7 @@
 **Rackphone CLI** is the host-side control surface for Rackphone units: it adopts a
 phone, configures the Magisk plugins running on it, installs and updates those
 modules, exports their metrics to Prometheus, and relays incoming SMS and calls into
-a store and onward to ntfy. It is the only thing an operator runs; the phone itself
+a store and onward to the client app. It is the only thing an operator runs; the phone itself
 is never touched.
 
 The design follows from one constraint: **the CLI knows nothing about what a plugin
@@ -209,16 +209,13 @@ batch instead of losing it. Duplicates are absorbed by a `UNIQUE (unit, kind,
 source_id)` constraint, which is also what stops a redelivery producing a second
 notification.
 
-With no ntfy server configured the gateway stores and serves events but sends
-nothing; that is a supported mode, not a misconfiguration.
-
 | Endpoint | Returns |
 | --- | --- |
-| `GET /health` | Store counts, ntfy state, drain counters — no token needed |
+| `GET /health` | Status, version and TOTP state — no token needed |
 | `GET /api/events` | Everything, filtered by `kind`, `unit`, `since`, `limit` |
 | `GET /api/messages` | Received SMS |
 | `GET /api/calls` | Received calls |
-| `GET /api/stream` | Server-sent events for anything stored after connecting |
+| `GET /api/stream` | Server-sent events for anything stored after connecting, with the filter verdict |
 | `POST /api/messages` | `501` — sending needs a companion APK, see [docs/messaging.md](../docs/messaging.md) |
 
 ## 🔧 Configuration
@@ -247,14 +244,6 @@ overridden by an environment variable for the container case:
 | `gateway.api_port` | `RACKPHONE_API_PORT` | `9106` | API port |
 | `gateway.api_token` | `RACKPHONE_API_TOKEN` | unset | Bearer token; unset means no auth |
 | `gateway.db_path` | `RACKPHONE_DB_PATH` | XDG state dir | SQLite event store |
-| `ntfy.url` | `RACKPHONE_NTFY_URL` | unset | ntfy server; unset means store-only |
-| `ntfy.topic` | `RACKPHONE_NTFY_TOPIC` | unset | Topic to publish to |
-| `ntfy.user` / `ntfy.password` | `RACKPHONE_NTFY_USER` / `RACKPHONE_NTFY_PASSWORD` | unset | Basic auth |
-| `ntfy.token` | `RACKPHONE_NTFY_TOKEN` | unset | Token auth; wins over basic |
-| `ntfy.priority_sms` | — | `default` | Priority for an SMS |
-| `ntfy.priority_call` | — | `high` | Priority for an answered call |
-| `ntfy.timeout` | — | `10.0` | HTTP timeout in seconds |
-| `ntfy.retries` | — | `3` | Attempts before a push is reported failed |
 
 The API binds loopback by default, which is why an unset token means no
 authentication: widening the bind and setting a token is all it takes to lock it
@@ -280,8 +269,8 @@ cli/
     gateway/
       config.py         host-side configuration and secret masking
       store.py          SQLite event store and its dedup contract
-      drain.py          the drain loop: phone spool → store → ntfy
-      notify.py         ntfy rendering and delivery
+      drain.py          the drain loop: phone spool → store
+      filters.py        which events the client announces
       api.py            FastAPI app over the event store
     metrics/
       exposition.py     collecting exposition text and labelling every sample
@@ -301,7 +290,7 @@ task test          # or: uv run pytest
 task test-cov      # coverage, gated at 90%
 ```
 
-The suite needs no phone: adb, the device schema and ntfy are all stood in for, so
+The suite needs no phone: adb and the device schema are stood in for, so
 what is asserted is the pair of effects a command has — the command sent to the
 device, and the change written back into the unit file.
 
@@ -313,7 +302,6 @@ device, and the change written back into the unit file.
 | `device/test_plugins.py` | Schema parsing and host-side validation |
 | `gateway/test_store.py` | Storage and the at-least-once redelivery contract |
 | `gateway/test_drain.py` | Drain ordering, dedup, one bad unit not stopping the rest |
-| `gateway/test_notify.py` | Payload shaping, auth, retry |
 | `gateway/test_config.py` | Configuration layering and secret masking |
 | `gateway/test_api.py` | Endpoints, filters, the bearer token, the event stream |
 | `metrics/test_exposition.py` | Label injection and per-unit availability |

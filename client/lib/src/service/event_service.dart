@@ -136,8 +136,10 @@ final class _EventTaskHandler extends TaskHandler {
             });
           }
           final settings = await ServiceSettings.read();
-          // A message this gateway sent is news to nobody.
+          // A message this gateway sent is news to nobody, and one the
+          // gateway's filters suppressed is listed without being announced.
           if (event.direction != 'out' &&
+              event.notify &&
               settings.shouldNotify(event.kind, DateTime.now())) {
             await notifications.show(event);
           }

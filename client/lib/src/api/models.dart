@@ -159,6 +159,7 @@ class GatewayEvent {
     this.app,
     this.title,
     this.sub,
+    this.notify = true,
   });
 
   factory GatewayEvent.fromJson(Map<String, dynamic> json) {
@@ -181,6 +182,9 @@ class GatewayEvent {
         final int sub when sub >= 0 => sub,
         _ => null,
       },
+      // Only the live stream carries the filter verdict; anything that says
+      // nothing is announced, as it was before filters reached the client.
+      notify: json['notify'] != false,
     );
   }
 
@@ -206,6 +210,10 @@ class GatewayEvent {
   /// from a single-SIM unit, an older companion, or a notification.
   final int? sub;
 
+  /// Whether the gateway's filters let a client raise a notification for this
+  /// event. A filtered event is still listed; it just arrives silently.
+  final bool notify;
+
   /// When it happened: the device's [timestamp] is in milliseconds, the
   /// host's [receivedAt] in seconds and only a fallback.
   DateTime? get occurredAt {
@@ -228,7 +236,8 @@ class GatewayEvent {
       receivedAt == other.receivedAt &&
       app == other.app &&
       title == other.title &&
-      sub == other.sub;
+      sub == other.sub &&
+      notify == other.notify;
 
   @override
   int get hashCode => Object.hash(
@@ -244,6 +253,7 @@ class GatewayEvent {
     app,
     title,
     sub,
+    notify,
   );
 }
 
@@ -445,9 +455,6 @@ class GatewayStats {
     required Map<String, int> eventsByKind,
     required this.drained,
     required this.stored,
-    required this.filtered,
-    required this.pushed,
-    required this.pushFailed,
     required this.errors,
     this.security,
   }) : eventsByKind = Map.unmodifiable(eventsByKind);
@@ -458,9 +465,6 @@ class GatewayStats {
       eventsByKind: _intMap(json['events']),
       drained: _int(gateway['drained']) ?? 0,
       stored: _int(gateway['stored']) ?? 0,
-      filtered: _int(gateway['filtered']) ?? 0,
-      pushed: _int(gateway['pushed']) ?? 0,
-      pushFailed: _int(gateway['push_failed']) ?? 0,
       errors: _int(gateway['errors']) ?? 0,
       security: json['security'] is Map
           ? SecuritySummary.fromJson(_map(json['security']))
@@ -471,9 +475,6 @@ class GatewayStats {
   final Map<String, int> eventsByKind;
   final int drained;
   final int stored;
-  final int filtered;
-  final int pushed;
-  final int pushFailed;
   final int errors;
   final SecuritySummary? security;
 
@@ -483,9 +484,6 @@ class GatewayStats {
       _mapEquals(eventsByKind, other.eventsByKind) &&
       drained == other.drained &&
       stored == other.stored &&
-      filtered == other.filtered &&
-      pushed == other.pushed &&
-      pushFailed == other.pushFailed &&
       errors == other.errors &&
       security == other.security;
 
@@ -496,9 +494,6 @@ class GatewayStats {
     ),
     drained,
     stored,
-    filtered,
-    pushed,
-    pushFailed,
     errors,
     security,
   );
@@ -510,20 +505,17 @@ class GatewayHealth {
   const GatewayHealth({
     required this.status,
     required this.version,
-    required this.ntfyEnabled,
     required this.totpEnabled,
   });
 
   factory GatewayHealth.fromJson(Map<String, dynamic> json) => GatewayHealth(
     status: _string(json['status']),
     version: _string(json['version']),
-    ntfyEnabled: json['ntfy'] == 'enabled',
     totpEnabled: json['totp'] == 'enabled',
   );
 
   final String status;
   final String version;
-  final bool ntfyEnabled;
   final bool totpEnabled;
 
   @override
@@ -531,11 +523,10 @@ class GatewayHealth {
       other is GatewayHealth &&
       status == other.status &&
       version == other.version &&
-      ntfyEnabled == other.ntfyEnabled &&
       totpEnabled == other.totpEnabled;
 
   @override
-  int get hashCode => Object.hash(status, version, ntfyEnabled, totpEnabled);
+  int get hashCode => Object.hash(status, version, totpEnabled);
 }
 
 /// One row of the gateway's permanent action log.

@@ -209,3 +209,69 @@ class TestSameSession:
         taken = ScreenSession("lisa01", "laptop", 150, 150, "4001")
         assert not same_session(taken, mine)
         assert not same_session(None, mine)
+
+
+def test_a_lease_is_fresh_up_to_its_timeout_and_stale_after() -> None:
+    manager = SessionManager()
+    manager.acquire("one", "tablet", 100)
+    with pytest.raises(SessionBusy):
+        manager.acquire("one", "laptop", 130)
+
+    # One second later the old lease is released and the new holder gets it.
+    assert manager.acquire("one", "laptop", 131).holder == "laptop"
+
+
+def test_taking_a_stale_lease_stops_the_old_encoder_first(
+    device_calls: list[tuple[str, ...]],
+) -> None:
+    manager = SessionManager()
+    manager.acquire("one", "tablet", 100)
+    device_calls.clear()
+    manager.acquire("one", "laptop", 131)
+    stop = device_calls.index(("SERIAL", "action", "remote", "stop"))
+    start = next(
+        index
+        for index, call in enumerate(device_calls)
+        if call[1:3] == ("action", "remote") and call[3] == "start"
+    )
+    assert stop < start
+    assert any(call[:2] == ("SERIAL", "unreverse") for call in device_calls)
+
+
+def test_heartbeat_at_the_timeout_still_refreshes() -> None:
+    manager = SessionManager()
+    manager.acquire("one", "tablet", 100)
+    refreshed = manager.heartbeat("one", 130)
+    assert refreshed is not None and refreshed.last_seen == 130
+
+
+def test_heartbeat_after_the_timeout_releases_the_session(
+    device_calls: list[tuple[str, ...]],
+) -> None:
+    manager = SessionManager()
+    manager.acquire("one", "tablet", 100)
+    assert manager.heartbeat("one", 131) is None
+    assert manager.get("one") is None
+    assert ("SERIAL", "action", "remote", "stop") in device_calls
+
+
+def test_the_reaper_spares_a_lease_at_its_timeout() -> None:
+    manager = SessionManager()
+    manager.acquire("one", "tablet", 100)
+    manager.reap(130)
+    assert manager.get("one") is not None
+
+
+def test_a_unit_without_a_session_has_no_listener() -> None:
+    with pytest.raises(RuntimeError, match="no reverse tunnel"):
+        SessionManager().listener("one")
+
+
+def test_release_finds_the_device_when_the_unit_declares_no_serial(
+    monkeypatch: pytest.MonkeyPatch, device_calls: list[tuple[str, ...]]
+) -> None:
+    monkeypatch.setattr(
+        units.Unit, "load", lambda name: units.Unit(name, units.Path("x.env"), "")
+    )
+    SessionManager().release("one", 100)
+    assert ("SERIAL", "action", "remote", "stop") in device_calls

@@ -11,6 +11,12 @@
 #
 #   docker compose cp ./units/. gateway:/repo/units/
 #   docker compose cp ./gateway.toml gateway:/config/gateway.toml
+#   docker compose exec -u root gateway chown -R rackphone:rackphone /repo/units
+#
+# The chown is not optional. `cp` keeps the owner the files had on this side,
+# and the containers run as their own user, so without it `rackphone set`
+# changes the phone but cannot record the change - and the next deploy
+# reverts it.
 #
 # or, equivalently, by adopting the phone from inside the container:
 #
@@ -20,10 +26,6 @@
 # passes as environment - the one kind of configuration that crosses a remote
 # context intact:
 #
-#   RACKPHONE_NTFY_URL=https://ntfy.example.com
-#   RACKPHONE_NTFY_TOPIC=rackphone
-#   RACKPHONE_NTFY_USER=rackphone
-#   RACKPHONE_NTFY_PASSWORD=...
 #   RACKPHONE_API_TOKEN=...
 #
 # Prometheus and Grafana are not here on purpose: both usually watch more than
@@ -42,7 +44,7 @@ name: rackphone
 x-rackphone: &rackphone
   build:
     context: ./cli
-  image: rackphone:0.2.0
+  image: rackphone:0.3.0
   restart: unless-stopped
   network_mode: host
 
@@ -58,8 +60,8 @@ services:
     volumes:
       - repo:/repo
 
-  # SMS and call relay: drains the companion plugin, stores, forwards to ntfy,
-  # and serves the API.
+  # SMS and call relay: drains the companion plugin, stores, and serves the API
+  # and the live stream the client announces events from.
   gateway:
     <<: *rackphone
     container_name: rackphone-gateway
@@ -75,13 +77,6 @@ services:
       ADB_SERVER_SOCKET: tcp:127.0.0.1:5037
       RACKPHONE_REPO: /repo
       RACKPHONE_GATEWAY_HOST: ${RACKPHONE_GATEWAY_HOST:-127.0.0.1}
-      # Absent values are a supported state: the gateway then stores events and
-      # serves them without pushing anywhere.
-      RACKPHONE_NTFY_URL: ${RACKPHONE_NTFY_URL:-}
-      RACKPHONE_NTFY_TOPIC: ${RACKPHONE_NTFY_TOPIC:-}
-      RACKPHONE_NTFY_USER: ${RACKPHONE_NTFY_USER:-}
-      RACKPHONE_NTFY_PASSWORD: ${RACKPHONE_NTFY_PASSWORD:-}
-      RACKPHONE_NTFY_TOKEN: ${RACKPHONE_NTFY_TOKEN:-}
       RACKPHONE_API_TOKEN: ${RACKPHONE_API_TOKEN:-}
       # Filters, the administrator and trusted proxies are not scalars an
       # environment variable can carry, so they live in a file in the volume.

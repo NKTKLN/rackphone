@@ -69,8 +69,8 @@ from rackphone.gateway.files import (
 from rackphone.gateway.files import (
     store as store_file,
 )
+from rackphone.gateway.filters import should_push
 from rackphone.gateway.login import LoginService, RefusalReason, Tokens
-from rackphone.gateway.presence import ClientPresence
 from rackphone.gateway.relay import ScreenRelay
 from rackphone.gateway.send import SendError, send_sms
 from rackphone.gateway.session import (
@@ -86,6 +86,7 @@ from rackphone.gateway.store import (
     KIND_NOTIFICATION,
     KIND_SMS,
     MAX_QUERY_LIMIT,
+    Event,
     EventStore,
 )
 from rackphone.gateway.voice import VoiceRelay
@@ -234,6 +235,34 @@ def readable_rows(
     ]
 
 
+def with_notify_decision(
+    row: dict[str, Any], config: GatewayConfig | None
+) -> dict[str, Any]:
+    """Attach the filters' verdict on whether a client should announce a row.
+
+    Args:
+        row: One stored event row.
+        config: Filter policy, or None to announce everything.
+
+    Returns:
+        dict[str, Any]: The row with `notify` and the deciding `filter` added.
+    """
+    # A filter suppresses the announcement, never the record: the row is still
+    # streamed, so the client lists it and only stays quiet about it.
+    if config is None:
+        return {**row, "notify": True, "filter": None}
+    event = Event(
+        unit=row["unit"],
+        kind=row["kind"],
+        source_id=row["source_id"],
+        address=row.get("address"),
+        body=row.get("body"),
+        direction=row.get("direction"),
+    )
+    notify, rule = should_push(event, config.filters)
+    return {**row, "notify": notify, "filter": rule.name if rule else None}
+
+
 def _tokens_body(tokens: Tokens) -> dict[str, str | int]:
     return {
         "refresh_token": tokens.refresh,
@@ -263,7 +292,6 @@ def create_app(  # noqa: C901, PLR0913, PLR0915, PLR0917
     store: EventStore,
     login: LoginService,
     gateway: MessageGateway | None = None,
-    presence: ClientPresence | None = None,
     sessions: SessionManager | None = None,
     contacts: ContactBook | None = None,
 ) -> FastAPI:
@@ -274,7 +302,6 @@ def create_app(  # noqa: C901, PLR0913, PLR0915, PLR0917
         store: Event store to read from.
         login: Authentication policy service.
         gateway: Running drain loop whose counters are exposed by the API.
-        presence: Shared tracker for live event streams.
         sessions: Shared screen-session owner, or an empty local manager.
         contacts: Address-book cache, or one that reads units over adb.
 
@@ -282,7 +309,6 @@ def create_app(  # noqa: C901, PLR0913, PLR0915, PLR0917
         FastAPI: The configured application.
     """
     legacy_enabled = bool(config.api_token and is_loopback(config.api_host))
-    client_presence = presence or ClientPresence()
     screen_sessions = sessions or SessionManager()
     contact_book = contacts or ContactBook()
     voice_sessions = SessionManager(
@@ -576,7 +602,6 @@ def create_app(  # noqa: C901, PLR0913, PLR0915, PLR0917
         return {
             "status": "ok",
             "version": __version__,
-            "ntfy": "enabled" if config.ntfy.is_configured else "disabled",
             "totp": "enabled" if login.store.totp_secret() else "disabled",
         }
 
@@ -1104,7 +1129,6 @@ def create_app(  # noqa: C901, PLR0913, PLR0915, PLR0917
                 store,
                 store.latest_event_id(),
                 config,
-                client_presence,
             ),
             media_type="text/event-stream",
         )
@@ -1116,40 +1140,28 @@ async def iter_new_events(
     store: EventStore,
     last_seen_id: int,
     config: GatewayConfig | None = None,
-    presence: ClientPresence | None = None,
-    clock: Callable[[], int] = lambda: int(time.time()),
 ) -> AsyncIterator[str]:
     """Yield permitted stored rows above a starting id, oldest first.
 
     Args:
         store: Event store to follow.
         last_seen_id: Highest row id the client has already seen.
-        config: Capability policy, or None to permit every unit.
-        presence: Tracker to hold open while this iterator is live.
-        clock: Current Unix time provider; a test supplies its own.
+        config: Capability and filter policy, or None to permit and announce all.
 
     Yields:
         str: One server-sent `data:` frame per stored event.
     """
-    if presence is not None:
-        presence.opened()
-    try:
-        while True:
-            rows = readable_rows(
-                [
-                    row
-                    for row in store.query_events(limit=STREAM_BATCH_SIZE)
-                    if row["id"] > last_seen_id
-                ],
-                config,
-            )
-            for row in reversed(rows):
-                last_seen_id = max(last_seen_id, row["id"])
-                yield f"data: {json.dumps(row, ensure_ascii=False)}\n\n"
-            await asyncio.sleep(STREAM_POLL_SECONDS)
-    finally:
-        # Nothing in here may raise. This runs when a client disconnects, and an
-        # exception would both hide why the stream ended and leave the gateway
-        # believing someone is still watching - which silences ntfy for good.
-        if presence is not None:
-            presence.closed(clock())
+    while True:
+        rows = readable_rows(
+            [
+                row
+                for row in store.query_events(limit=STREAM_BATCH_SIZE)
+                if row["id"] > last_seen_id
+            ],
+            config,
+        )
+        for row in reversed(rows):
+            last_seen_id = max(last_seen_id, row["id"])
+            frame = with_notify_decision(row, config)
+            yield f"data: {json.dumps(frame, ensure_ascii=False)}\n\n"
+        await asyncio.sleep(STREAM_POLL_SECONDS)

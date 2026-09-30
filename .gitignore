@@ -20,7 +20,7 @@ tests/.tree/
 .coverage.*
 coverage.xml
 
-# Both hold an ntfy credential; the example file is the tracked one.
+# Both hold the admin password hash; the example file is the tracked one.
 gateway.toml
 .env
 tests/.tree-msg/

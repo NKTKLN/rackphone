@@ -30,7 +30,7 @@ Xiaomi 11 Lite 5G NE (lisa)                      Host
 │   SMS_RECEIVED ──► inbox.jsonl ───────┼─────┼─► drain / ack       │
 │   PHONE_STATE  ──►      ▲             │ USB │      │              │
 │                         │             │◄───►│      ▼              │
-│   SmsManager   ◄── keepalive alarm    │     │   SQLite ──► ntfy   │
+│   SmsManager   ◄── keepalive alarm    │     │   SQLite ──► stream │
 │        │                              │     └─────────────────────┘
 │        ▼          status.json         │
 │    the radio      outbox.jsonl        │     ┌─────────────────────┐

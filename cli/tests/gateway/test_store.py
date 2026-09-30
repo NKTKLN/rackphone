@@ -2,7 +2,7 @@
 
 The device delivers at-least-once, so the store is the component that has to
 make a duplicate harmless. These tests exist because the alternative failure - a
-redelivered batch producing a second ntfy alert for the same SMS - is exactly
+redelivered batch producing a second alert for the same SMS - is exactly
 the annoyance the design was supposed to rule out.
 """
 

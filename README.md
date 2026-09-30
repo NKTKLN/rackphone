@@ -161,7 +161,7 @@ Full reference in [docs/metrics.md](docs/metrics.md).
 ```text
 cli/               host-side CLI, src layout, one package per concern
   src/rackphone/device/    adb and the schema a unit reports
-  src/rackphone/gateway/   relay, store, drain loop, filters, ntfy, screen sessions
+  src/rackphone/gateway/   relay, store, drain loop, filters, screen sessions
   src/rackphone/gateway/   authentication: scrypt, TOTP, lockouts, scoped tokens
   src/rackphone/metrics/   Prometheus bridge
   src/rackphone/cli/       the command tree, one module per command group
@@ -203,7 +203,7 @@ with no phone.
 | `tests/test_companion.sh` | Which broadcast the plugin sends, and what it reports when the app is not there |
 | `app/test/` | `status.json` parsing, form validation, and the setup screen against a fake unit |
 | `app/android/.../test/` | Dialable numbers, and the per-SIM keepalive arithmetic |
-| `cli/tests/` | Schema validation, unit files, command effects, label injection, device resolution, store dedup, ntfy shaping, notification filters |
+| `cli/tests/` | Schema validation, unit files, command effects, label injection, device resolution, store dedup, notification filters |
 | `tests/test_remote.sh` | The screen session: exclusivity, the checksum gate, a server that ignores TERM |
 | `client/test/` | The gateway client, the session, the stream parser, and every page |
 | `tests/test_integration.sh` | A real unit, the bridge, and Prometheus end to end |

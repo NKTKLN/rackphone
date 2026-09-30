@@ -16,7 +16,7 @@ phone                            host                             client
 │   ephemeral           │        │ gateway :9106         │        │          │
 │                       │        │   auth, sessions      │        │  screen  │
 │ rackphone-companion   │◄─ adb ─┤   SQLite store        │◄─ TLS ─┤  feed    │
-│   SMS, calls,         │ drain  │   ntfy (fallback)     │        │  sms     │
+│   SMS, calls,         │ drain  │   filters → stream    │        │  sms     │
 │   app notifications   │        └──────────┬────────────┘        │  files   │
 └───────────────────────┘                   │                     └──────────┘
                                           Caddy ─────── https ─────────┘
@@ -277,9 +277,10 @@ format guarantee, and a notification body containing a newline breaks the parse.
 This reverses the note at the end of `messaging.md` that mirroring app
 notifications is deliberately not implemented. The reasoning there still holds —
 it does copy arbitrary third-party content off the device — which is why the
-push side defaults to silence and the store forgets it after thirty days.
+announcements can be narrowed to an allow list and the store forgets it after
+thirty days.
 
-### Which ones are worth a push
+### Which ones are worth announcing
 
 Filter rules gain a `mode`. Absent, it is `deny`, so existing configuration
 behaves as it always did.
@@ -301,9 +302,10 @@ contains = "special offer"
 
 Resolution, in order:
 
-1. A matching `deny` rule suppresses the push.
-2. Otherwise, if any `allow` rule exists for that kind, only a match is pushed.
-3. Otherwise the event is pushed.
+1. A matching `deny` rule suppresses the announcement.
+2. Otherwise, if any `allow` rule exists for that kind, only a match is
+   announced.
+3. Otherwise the event is announced.
 
 `deny` wins because it is always the narrower statement: an allow list is
 written broadly, per package, and a deny rule points at one specific thing. The
@@ -314,9 +316,10 @@ An `allow` rule with no conditions is refused at startup for the same reason an
 empty `deny` rule already is. It fails as noise rather than as silence, but it
 fails just as invisibly.
 
-Filters still decide only what is **pushed**, never what is stored
+Filters still decide only what is **announced**, never what is stored
 (`cli/src/rackphone/gateway/filters.py:3`). The full feed reaches the client
-either way.
+either way: every stream frame carries `notify` and the deciding `filter`, and
+the app lists a suppressed event without raising a notification for it.
 
 ### Retention
 
@@ -356,36 +359,23 @@ The client holds an SSE connection to `/api/stream`
 connection, one authentication scheme, no third party, and no Google Services in
 the build.
 
-ntfy stays as the independent second channel, under two switches:
+The client is the only channel. There is no push service behind it: when no
+client is connected, events are stored and wait to be read.
 
-```toml
-[ntfy]
-enabled = true
-mirror = false   # false: only when no client has been connected for 60 s
-```
+Security events are written to the gateway log, since they are exactly the
+events a client cannot tell you about:
 
-"No client" means no live SSE connection, not the absence of a valid token — a
-refresh token lives for thirty days, including the ones on a phone in a drawer.
-The sixty-second grace period exists because a handover from Wi-Fi to LTE drops
-the connection for a moment, and without it every such moment would produce a
-duplicate push.
-
-Some events go to ntfy **regardless**, because they are exactly the events a
-client cannot tell you about:
-
-| Event | Why it cannot wait |
+| Event | Why it matters |
 | --- | --- |
 | Account lockout | You cannot log in, so the app cannot tell you why |
-| 5 failed logins | Someone is guessing, and you want to know now |
+| 5 failed logins | Someone is guessing |
 | Login from a new device | The only sign that password and TOTP were taken |
-| Unit unreachable for 60 min | The phone left the USB bus |
 
-None of them carries message content. Sixty minutes is long enough that
-`rackphone install --reboot` and a cable reseat pass without an alert.
+None of them carries message content.
 
 The client raises a local notification only for events that arrive on a live
 stream, never for the backlog fetched after a reconnect — otherwise returning to
-network coverage would replay everything ntfy already delivered.
+network coverage would replay everything the stream already announced.
 
 ## Files
 
@@ -467,7 +457,7 @@ target; keys are not, because a bank's menu takes PINs.
 and kept for five minutes.
 
 `/health` stays open so a probe still works, and carries nothing worth reading:
-status, version, and whether ntfy and TOTP are on. The counters moved to
+status, version, and whether TOTP is on. The counters moved to
 `GET /api/stats` behind `read` scope — an unauthenticated endpoint sitting behind
 a public proxy has no business reporting how many messages arrived.
 
@@ -561,7 +551,7 @@ sketch above, and are worth naming rather than leaving to be discovered:
 | Scopes, capabilities and the routes | `cli/src/rackphone/gateway/api.py` |
 | The send route is reserved and returns 501 | `cli/src/rackphone/gateway/api.py:162` |
 | The event stream the client follows | `cli/src/rackphone/gateway/api.py:176` |
-| A filter suppresses the push, never the record | `cli/src/rackphone/gateway/filters.py:3` |
+| A filter suppresses the announcement, never the record | `cli/src/rackphone/gateway/filters.py:3` |
 | Events are acked only after they are committed | `cli/src/rackphone/gateway/drain.py:1` |
 | Every unit is drained sequentially, in one loop | `cli/src/rackphone/gateway/drain.py:149` |
 | Deduplication key for spooled events | `cli/src/rackphone/gateway/store.py:20` |

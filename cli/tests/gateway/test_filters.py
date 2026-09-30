@@ -98,7 +98,9 @@ class TestMatching:
     def test_a_missing_sender_matches_no_sender_rule(
         self, make_event: EventFactory
     ) -> None:
-        assert rule().matches_event(make_event(address=None)) is False
+        # Every other condition matches, so only the sender can refuse it.
+        event = make_event(address=None, body=BEELINE_BODY)
+        assert rule().matches_event(event) is False
 
     def test_a_disabled_rule_keeps_its_conditions_but_matches_nothing(
         self, make_event: EventFactory
@@ -213,7 +215,7 @@ class TestConfiguration:
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         config_file = tmp_path / "gateway.toml"
-        config_file.write_text('[ntfy]\nurl = "https://n.example"\n')
+        config_file.write_text("[gateway]\npoll_seconds = 5\n")
         monkeypatch.setenv("RACKPHONE_GATEWAY_CONFIG", str(config_file))
         assert GatewayConfig.load().filters == []
 
