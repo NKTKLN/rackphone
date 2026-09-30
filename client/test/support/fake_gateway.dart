@@ -124,12 +124,7 @@ final class FakeGateway
   @override
   Future<GatewayHealth> health() async =>
       healthValue ??
-      const GatewayHealth(
-        status: 'ok',
-        version: '9.9.9',
-        ntfyEnabled: false,
-        totpEnabled: true,
-      );
+      const GatewayHealth(status: 'ok', version: '9.9.9', totpEnabled: true);
 
   @override
   Future<List<RackUnit>> units() async => unitsValue;
@@ -257,9 +252,6 @@ GatewayStats makeStats({required bool totp}) => GatewayStats(
   eventsByKind: const {'sms': 3, 'call': 1},
   drained: 0,
   stored: 4,
-  filtered: 0,
-  pushed: 0,
-  pushFailed: 0,
   errors: 0,
   security: SecuritySummary(
     lastLoginAt: 1700000000,

@@ -56,8 +56,8 @@ void main() {
   });
 
   test('an unknown kind is shown rather than silently dropped', () {
-    // The gateway stops pushing to ntfy while this client is connected, so a
-    // kind dropped here is lost on both channels.
+    // This client is the only channel that announces events, so a kind
+    // dropped here is never announced at all.
     const settings = ServiceSettings();
     expect(settings.shouldNotify('mms', DateTime(2026, 9, 5, 12)), isTrue);
   });

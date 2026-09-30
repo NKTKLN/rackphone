@@ -94,9 +94,9 @@ final class ServiceSettings {
       'call' => notifyOnCalls,
       'notification' => notifyOnNotifications,
       // A kind this build has never heard of is shown rather than dropped.
-      // While this client holds its stream the gateway suppresses its own ntfy
-      // push, so anything discarded here is lost on both channels at once - and
-      // an unconfigured kind is far more likely to be a message than noise.
+      // This client is the only channel that announces anything, so a kind
+      // discarded here is never announced at all - and an unconfigured kind is
+      // far more likely to be a message than noise.
       _ => true,
     };
     if (!enabled) return false;

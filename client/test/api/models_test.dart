@@ -21,7 +21,8 @@ void main() {
     expect(stats.eventsByKind, isEmpty);
     expect(stats.drained, 0);
     expect(stats.security, isNull);
-    expect(health.ntfyEnabled, isFalse);
+    expect(health.totpEnabled, isFalse);
+    expect(event.notify, isTrue);
     expect(session.revokedAt, isNull);
   });
 
@@ -66,14 +67,7 @@ void main() {
   test('stats read store totals and gateway counters', () {
     final stats = GatewayStats.fromJson(const {
       'events': {'sms': 3},
-      'gateway': {
-        'drained': 8,
-        'stored': 7,
-        'filtered': 1,
-        'pushed': 6,
-        'push_failed': 2,
-        'errors': 4,
-      },
+      'gateway': {'drained': 8, 'stored': 7, 'errors': 4},
       'security': {
         'last_login_at': 100,
         'last_login_device': 'console',
@@ -84,7 +78,7 @@ void main() {
     });
 
     expect(stats.eventsByKind, {'sms': 3});
-    expect(stats.pushFailed, 2);
+    expect(stats.stored, 7);
     expect(stats.security?.lastLoginDevice, 'console');
     expect(stats.security?.totpEnabled, isTrue);
   });
@@ -101,6 +95,34 @@ void main() {
 
     expect(event.app, 'Telegram');
     expect(event.title, 'Olga');
+  });
+
+  test('a stream frame carries the gateway filter verdict', () {
+    final filtered = GatewayEvent.fromJson(const {
+      'id': 4,
+      'unit': 'lisa01',
+      'kind': 'sms',
+      'notify': false,
+      'filter': 'beeline-app-links',
+    });
+    final announced = GatewayEvent.fromJson(const {
+      'id': 5,
+      'unit': 'lisa01',
+      'kind': 'sms',
+      'notify': true,
+    });
+
+    expect(filtered.notify, isFalse);
+    expect(announced.notify, isTrue);
+    expect(
+      filtered ==
+          GatewayEvent.fromJson(const {
+            'id': 4,
+            'unit': 'lisa01',
+            'kind': 'sms',
+          }),
+      isFalse,
+    );
   });
 
   test('a broken raw_json leaves the event readable', () {
