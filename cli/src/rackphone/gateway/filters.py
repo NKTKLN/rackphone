@@ -1,9 +1,10 @@
 """Notification filters: which events are worth waking somebody for.
 
-A filter suppresses the **push**, never the record. The delivery contract the
-rest of this gateway is built on is that a message the phone received is one the
-host can still show you, so a filtered event is committed, served on the API and
-counted - it just does not reach ntfy. Dropping it at the storage layer would
+A filter suppresses the **announcement**, never the record. The delivery
+contract the rest of this gateway is built on is that a message the phone
+received is one the host can still show you, so a filtered event is committed,
+served on the API and streamed - the stream just tells clients not to raise a
+notification for it. Dropping it at the storage layer would
 make a rule with a typo in it indistinguishable from a message that never
 arrived, and that is the one failure this pipeline is designed not to have.
 

@@ -1,8 +1,8 @@
 # Messaging
 
 Relays **incoming SMS and incoming calls** off a unit, and **sends** from it:
-pushed to ntfy for alerting, queryable over an HTTP API, and kept alive on a
-schedule so an idle SIM is not reclaimed.
+streamed to the client app for alerting, queryable over an HTTP API, and kept
+alive on a schedule so an idle SIM is not reclaimed.
 
 The phone collects and spools. Everything else — storage, relay policy, retries,
 credentials — is on the host. The phone holds no secrets it did not generate
@@ -13,7 +13,7 @@ phone                                        host
 ┌───────────────────────────────┐
 │ companion APK                 │   adb    ┌─────────────────────┐
 │   RECEIVE_SMS ──► inbox spool │◄────────►│ gateway ──► SQLite  │
-│   SEND_SMS   ◄── keepalive    │  drain   │    └──────► ntfy    │
+│   SEND_SMS   ◄── keepalive    │  drain   │    └──────► stream  │
 └───────────────┬───────────────┘   ack    │ api (FastAPI) ──► you│
                 │ broadcasts               └─────────────────────┘
 ┌───────────────┴───────────────┐
@@ -70,8 +70,9 @@ rather than lost.
 
 The duplicate is absorbed by a `UNIQUE (unit, kind, source_id)` constraint and
 `INSERT OR IGNORE` in `store.py`, not by application logic. Only rows that were
-genuinely new are forwarded, so **the storage dedup is also the ntfy dedup** — a
-redelivered batch cannot produce a second alert.
+genuinely new are stored, and the stream follows the store, so **the storage
+dedup is also the alert dedup** — a redelivered batch cannot produce a second
+alert.
 
 That trade is deliberate. A duplicate notification is an annoyance; a dropped
 SMS is invisible.
@@ -190,17 +191,14 @@ not. When it does not resolve, the attempt is recorded as `no_target` and
 because "the SIM is being kept alive" is exactly the belief that must not be
 quietly false.
 
-Host settings live **outside the repo**, because they include an ntfy
-credential: `~/.config/rackphone/gateway.toml`, overridable per-key by
+Host settings live **outside the repo**, because they include the administrator
+password hash: `~/.config/rackphone/gateway.toml`, overridable per-key by
 `RACKPHONE_*` environment variables. `gateway.example.toml` is the tracked copy
 and ships blank. It is also where the notification [filters](#filters) live.
 
 ```sh
 uv run --project cli rackphone gwconfig   # secrets shown as set/unset only
 ```
-
-Leaving `ntfy.url` empty is a supported state: events are stored and served, and
-nothing leaves the network.
 
 ## Running
 
@@ -224,68 +222,14 @@ uv run --project cli rackphone gateway --once     # drain once and exit
 Binds `127.0.0.1:9106` by default with no auth. Set `api_token` **before**
 widening the bind — the API serves message content.
 
-## Notification format
-
-The body is pushed verbatim, and the title carries the sender:
-
-```text
-SMS from +79001234567
-Код подтверждения: 4821
-```
-
-```text
-Missed call
-+79001234567
-```
-
-**Presentation belongs to whatever renders the notification**, and markup added
-here does not survive the trip. Every consumer escapes the body before drawing
-its own envelope around it — the ntfy clients do, and so does a Telegram bridge,
-which must, because an SMS containing `<b>` would otherwise break the message it
-is embedded in. A code fence or a `<pre>` added at this end therefore arrives as
-literal characters.
-
-So a renderer that wants an SMS monospaced wraps it there, where the escaping
-already happens:
-
-```python
-lines.extend(["", f"<pre>{html.escape(message)}</pre>"])
-```
-
-Nothing is added around the body. **No timestamp and no call duration**: every
-client draws its own envelope — arrival time, priority, tags — and repeating any
-of it inside spends the two lines a push actually gets. The event time (when the
-phone received it, not when it was pushed) and the call length stay in the store
-and on the API.
-
-The number is in the title for SMS, where the body carries the message, and in
-the body for calls, where the title carries the call type. The two lines never
-repeat each other.
-
-Priorities are reserved rather than decorative: a **missed** call is `urgent`,
-because on an unattended unit that is the event actually worth interrupting for.
-
-Tags are plain words, and that is checked rather than assumed: ntfy replaces a
-recognised emoji shortcode with the picture, which loses the word a filter would
-match on. None of the seven tags below is an alias in
-[github/gemoji](https://github.com/github/gemoji), the list ntfy resolves
-against — while `phone`, `telephone`, `envelope` and `bell`, the obvious names
-for a relay like this, all are.
-
-| Event | Tags |
-| --- | --- |
-| SMS | `rackphone,sms` |
-| Incoming call | `rackphone,call,incoming` |
-| Missed call | `rackphone,call,missed` |
-| Rejected / blocked | `rackphone,call,rejected` / `,blocked` |
-
 ## Filters
 
 Not everything that arrives is worth a notification. An operator that sends the
 verification codes also sends the adverts, from the same sender, and on a racked
 unit an alert nobody acts on trains you to stop reading them.
 
-Filters are host-side rules in `gateway.toml` that decide what gets pushed:
+Filters are host-side rules in `gateway.toml` that decide what the client app
+announces with a notification:
 
 ```toml
 [[filters]]
@@ -302,13 +246,10 @@ sender = "com.bank.*"
 contains = "special offer"
 ```
 
-**A filter suppresses the push, never the record.** The message is still
-committed, still on `GET /api/messages`, still on the stream — only the ntfy
-call is skipped, and the counter says how often:
-
-```sh
-curl -s localhost:9106/health | jq .gateway.filtered
-```
+**A filter suppresses the announcement, never the record.** The message is
+still committed, still on `GET /api/messages`, still on the stream and listed in
+the app. Each stream frame carries the verdict — `"notify": false` and the
+deciding rule in `"filter"` — and the app stays silent for it.
 
 That is the whole reason filtering happens here and not on the phone. The device
 side already has `collect_sms=0`, which really does drop messages, and a rule
@@ -317,8 +258,8 @@ you an alert is recoverable; costing you the SMS is not.
 
 | Key | Matches |
 | --- | --- |
-| `name` | Label reported in `gwconfig`, in the drain log and nowhere else |
-| `mode` | `allow` pushes matches; `deny` suppresses them (the default) |
+| `name` | Label reported in `gwconfig` and in the stream's `filter` field |
+| `mode` | `allow` announces matches; `deny` suppresses them (the default) |
 | `unit` | Unit name, as in `units/*.env` |
 | `kind` | `sms`, `call` or `notification` |
 | `sender` | The address, as a glob: `beeline`, `beeline*`, `+7900*` |
@@ -341,8 +282,8 @@ matches = "(акци|тариф|подключ)"
 All matching is case-insensitive: the case an operator writes its own name in is
 its choice, not something to encode in a rule that then breaks when they change
 it. A matching `deny` suppresses first. Otherwise, when an event's kind has any
-active `allow` rules, one of them must match for the event to be pushed. A kind
-with no allow rules is pushed as before. Deny wins so a broad sender allow-list
+active `allow` rules, one of them must match for the event to be announced. A
+kind with no allow rules is announced as before. Deny wins so a broad sender allow-list
 can retain a precise exception for one unwanted message.
 
 Rules with **no conditions** are refused at startup: an empty deny rule would
@@ -356,8 +297,8 @@ uv run --project cli rackphone gwconfig   # lists every rule and what it matches
 ```
 
 A rule that reads the body cannot match when `include_body=0`: nothing was
-relayed, so the condition cannot be shown to hold, and an unproven filter pushes
-rather than suppresses.
+relayed, so the condition cannot be shown to hold, and an unproven filter
+announces rather than suppresses.
 
 ## Retention
 
@@ -381,7 +322,7 @@ to ignore retention.
 ## Privacy
 
 This pipes message content off the phone into a host database and onward to
-ntfy. Three controls:
+the client app. Three controls:
 
 - `include_body=0` — the host learns that a message arrived, from whom and
   when, without the content ever leaving the device. For app notifications it
@@ -400,8 +341,8 @@ controls: it copies arbitrary third-party content off the device. Two things
 narrow it. `collect_notifications=0` is the device default; when enabled, the
 listener records the sending package, app label, title, text and post time in
 the common spool, skipping ongoing notifications, group summaries and unchanged
-reposts. Pushes default to silence — a notification reaches the store and goes
-no further until an `allow` rule names its package — and the store forgets
+reposts. An `allow` rule naming the packages worth hearing from keeps the rest
+silent, and the store forgets
 notifications after thirty days, while SMS and calls are kept. See
 [remote-access.md](remote-access.md).
 
@@ -409,6 +350,3 @@ There is nobody at the rack to approve a notification listener in Settings, so
 the companion plugin grants it from root when collection is enabled and revokes
 it when collection is disabled. `rackphone status` reports whether the listener
 is actually bound, not merely whether the setting asks for it.
-
-An ntfy topic is a shared secret, not an access control. Anyone who knows the
-topic name can read it unless the server enforces auth on read.

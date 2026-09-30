@@ -215,7 +215,7 @@ class TestConfiguration:
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         config_file = tmp_path / "gateway.toml"
-        config_file.write_text('[ntfy]\nurl = "https://n.example"\n')
+        config_file.write_text("[gateway]\npoll_seconds = 5\n")
         monkeypatch.setenv("RACKPHONE_GATEWAY_CONFIG", str(config_file))
         assert GatewayConfig.load().filters == []
 

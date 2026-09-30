@@ -1,5 +1,5 @@
 # Copy to ~/.config/rackphone/gateway.toml and fill in.
-# Never commit the filled-in copy: it holds an ntfy credential.
+# Never commit the filled-in copy: it holds the administrator password hash.
 
 [gateway]
 poll_seconds = 5
@@ -34,27 +34,10 @@ trusted_proxies = ["127.0.0.1", "::1"]
 # [units.lisa01]
 # capabilities = ["sms", "notifications", "screen", "files"]
 
-[ntfy]
-# ntfy is the second channel, independent of the app. `enabled = false` stops
-# it without losing the server details below; `mirror = true` pushes everything,
-# while the default pushes only what no connected client was there to receive.
-# enabled = true
-# mirror = false
-# Leave url empty to store and serve events without pushing anywhere.
-url = ""
-topic = ""
-user = ""
-password = ""
-# token = ""       # preferred over user/password when your ntfy supports it
-
-priority_sms = "default"
-priority_call = "high"
-timeout = 10.0
-retries = 3
-
-# Filters decide what is worth a notification. An allow rule names what should
-# be pushed; a deny rule names what should be suppressed. Either way every event
-# is still stored and served on the API, so a mistake costs an alert, not data.
+# Filters decide what the client announces with a notification. An allow rule
+# names what should be announced; a deny rule names what should stay silent.
+# Either way every event is still stored, listed in the app and served on the
+# API, so a mistake costs an alert, not data.
 #
 # Keys inside a rule are ANDed, values inside a key are ORed, and all matching
 # is case-insensitive: `sender` is a glob, `contains` a substring, `matches` a
@@ -75,5 +58,5 @@ retries = 3
 # contains = "special offer"
 #
 # A matching deny wins. Otherwise an event kind with allow rules needs an allow
-# match; kinds with no allow rules continue to be pushed. This lets a broad
+# match; kinds with no allow rules continue to be announced. This lets a broad
 # sender allow-list keep a precise exception for one unwanted notification.

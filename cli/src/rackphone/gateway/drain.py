@@ -1,10 +1,10 @@
-"""Drain loop: phone spool -> store -> ntfy.
+"""Drain loop: phone spool -> store.
 
 Ordering is the whole contract. Events are acked on the device only after they
 are committed to the store, so an interruption in between means the batch is
 re-delivered rather than lost. Duplicates are absorbed by the store's UNIQUE
-constraint, and only genuinely new events reach the forwarder - where the
-configured filters get the last word on whether one is worth a notification.
+constraint. What happens next belongs to the live stream: clients follow the
+store, and the configured filters decide there which events they announce.
 """
 
 from __future__ import annotations
@@ -17,14 +17,10 @@ from dataclasses import asdict, dataclass
 from rackphone import render, units
 from rackphone.device import adb
 from rackphone.gateway.config import GatewayConfig
-from rackphone.gateway.filters import should_push
-from rackphone.gateway.notify import NtfyError, NtfyForwarder
-from rackphone.gateway.presence import ClientPresence
 from rackphone.gateway.store import Event, EventStore
 
 DRAIN_TIMEOUT_SECONDS = 60
 ACK_TIMEOUT_SECONDS = 30
-UNREACHABLE_ALERT_SECONDS = 60 * 60
 PRUNE_INTERVAL_SECONDS = 60 * 60
 
 # The plugin that owns the spool on the device. It fronts the companion app,
@@ -40,10 +36,6 @@ class GatewayStats:
 
     drained: int = 0
     stored: int = 0
-    filtered: int = 0
-    presence_skipped: int = 0
-    pushed: int = 0
-    push_failed: int = 0
     errors: int = 0
 
     def as_dict(self) -> dict[str, int]:
@@ -56,14 +48,12 @@ class GatewayStats:
 
 
 class MessageGateway:
-    """Polls every unit, stores what it finds, and forwards what is new."""
+    """Polls every unit and stores what it finds."""
 
     def __init__(
         self,
         config: GatewayConfig,
         store: EventStore,
-        forwarder: NtfyForwarder | None = None,
-        presence: ClientPresence | None = None,
         clock: Callable[[], int] | None = None,
     ) -> None:
         """Prepare the gateway.
@@ -71,20 +61,13 @@ class MessageGateway:
         Args:
             config: Poll interval and API settings.
             store: Where drained events are committed.
-            forwarder: Notification sink, or None to store without pushing.
-            presence: Live client tracker, or None for an unwatched gateway.
             clock: Current Unix time provider; defaults to the system clock.
         """
         self.config = config
         self.store = store
-        self.forwarder = forwarder
-        self.presence = presence or ClientPresence()
         self.clock = clock or (lambda: int(time.time()))
         self.stats = GatewayStats()
         self._stop_requested = threading.Event()
-        self._last_success: dict[str, int] = {}
-        self._outage_started: dict[str, int] = {}
-        self._outage_alerted: set[str] = set()
         self._last_prune: int | None = None
 
     def drain_unit(self, unit: units.Unit) -> int:
@@ -127,43 +110,7 @@ class MessageGateway:
         adb.run_device_cli(
             serial, ["action", COLLECTOR_PLUGIN, "ack"], timeout=ACK_TIMEOUT_SECONDS
         )
-
-        self._forward(unit.name, stored)
         return len(stored)
-
-    def _forward(self, unit_name: str, events: list[Event]) -> None:
-        """Push newly stored events that pass filter resolution.
-
-        Args:
-            unit_name: Unit the events came from, for the warning text.
-            events: Events that were new to the store.
-        """
-        if self.forwarder is None or not self.config.ntfy.is_configured:
-            return
-        for event in events:
-            if event.direction == "out":
-                # The operator placed it from a client, so a push would only
-                # announce their own action back to them.
-                continue
-            push, rule = should_push(event, self.config.filters)
-            if not push and rule is not None:
-                # Suppressed, not dropped: the event is already committed and
-                # is served on the API. Saying which rule ate it is the only
-                # way an over-broad filter is ever noticed.
-                self.stats.filtered += 1
-                render.dim(f"{unit_name}: {event.kind} filtered by {rule.name!r}")
-                continue
-            if not self.config.ntfy.mirror and self.presence.is_watched(self.clock()):
-                self.stats.presence_skipped += 1
-                continue
-            try:
-                if self.forwarder.send(event):
-                    self.stats.pushed += 1
-            except NtfyError as exc:
-                # The event is already durable, so a push failure is reported
-                # and moved past rather than retried forever in-line.
-                self.stats.push_failed += 1
-                render.warn(f"{unit_name}: ntfy push failed: {exc}")
 
     def run_once(self) -> int:
         """Drain every configured unit once.
@@ -176,14 +123,10 @@ class MessageGateway:
         for unit in units.load_all_units():
             try:
                 total += self.drain_unit(unit)
-                self._last_success[unit.name] = self.clock()
-                self._outage_started.pop(unit.name, None)
-                self._outage_alerted.discard(unit.name)
             except Exception as exc:
                 # One unreachable unit must not stop the others being drained.
                 self.stats.errors += 1
                 render.warn(f"{unit.name}: {exc}")
-                self._record_outage(unit.name)
         return total
 
     def _prune_if_due(self) -> None:
@@ -197,32 +140,6 @@ class MessageGateway:
         removed = self.store.prune(self.config.retention, now)
         if removed:
             render.dim(f"pruned {removed} expired event(s)")
-
-    def _record_outage(self, unit_name: str) -> None:
-        """Alert once when one unit has been unreachable for an hour.
-
-        Args:
-            unit_name: Name of the unit whose drain failed.
-        """
-        now = self.clock()
-        since = self._last_success.get(unit_name)
-        if since is None:
-            since = self._outage_started.setdefault(unit_name, now)
-        if now - since < UNREACHABLE_ALERT_SECONDS:
-            return
-        if self.forwarder is None or unit_name in self._outage_alerted:
-            return
-        # A five-second repeat is not an alert; it is a denial of service
-        # against our own phone. Recovery clears this marker for the next outage.
-        self._outage_alerted.add(unit_name)
-        try:
-            self.forwarder.send_alert(
-                "unit_unreachable",
-                f"Rackphone unit {unit_name} has not answered for 60 minutes.",
-            )
-        except NtfyError as exc:
-            self.stats.push_failed += 1
-            render.warn(f"{unit_name}: ntfy alert failed: {exc}")
 
     def run_forever(self) -> None:
         """Drain every unit on the configured interval until stopped."""

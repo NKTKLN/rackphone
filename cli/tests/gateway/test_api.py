@@ -10,10 +10,10 @@ import asyncio
 import json
 import socket
 import time
-from collections.abc import AsyncGenerator, Iterator
+from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, cast
+from typing import Any
 
 import pytest
 from conftest import EventFactory
@@ -25,11 +25,11 @@ from rackphone.gateway import api
 from rackphone.gateway.api import client_ip, create_app, iter_new_events
 from rackphone.gateway.auth import SCOPE_CONTROL, SCOPE_READ, hash_password
 from rackphone.gateway.authstore import AuthStore
-from rackphone.gateway.config import AdminConfig, GatewayConfig, NtfyConfig
+from rackphone.gateway.config import AdminConfig, GatewayConfig
 from rackphone.gateway.contacts import ContactBook, ContactsError
 from rackphone.gateway.drain import MessageGateway
+from rackphone.gateway.filters import FilterRule
 from rackphone.gateway.login import LoginService
-from rackphone.gateway.presence import ClientPresence
 from rackphone.gateway.session import ScreenSession, SessionBusy, SessionManager
 from rackphone.gateway.store import EventStore
 
@@ -76,18 +76,16 @@ class TestHealth:
         body = client.get("/health").json()
         assert body["status"] == "ok"
         assert "events" not in body
-        assert body["ntfy"] == "disabled"
 
-    def test_reports_ntfy_and_gateway_state(
+    def test_does_not_report_gateway_state(
         self, populated_store: EventStore, tmp_path: Path
     ) -> None:
-        config = GatewayConfig(ntfy=NtfyConfig(url="https://n.example", topic="t"))
+        config = GatewayConfig()
         gateway = MessageGateway(config, populated_store)
         auth_store = AuthStore(tmp_path / "auth.db")
         login = LoginService(config, auth_store)
         with TestClient(create_app(config, populated_store, login, gateway)) as client:
             body = client.get("/health").json()
-        assert body["ntfy"] == "enabled"
         assert "gateway" not in body
         auth_store.close()
 
@@ -1532,28 +1530,63 @@ class TestStream:
         assert frame.startswith("data: ")
         assert json.loads(frame.removeprefix("data: "))["source_id"] == 1
 
-    def test_closing_the_stream_releases_presence(
+    def test_frames_carry_the_filter_verdict(
+        self, store: EventStore, make_event: EventFactory
+    ) -> None:
+        # The client announces what arrives; a filtered event is still streamed
+        # so it is listed, and only the announcement is withheld.
+        store.add_events(
+            [
+                make_event(1, address="Beeline", body="https://dl.beeline.ru/x"),
+                make_event(2, address="Beeline", body="balance 10"),
+                make_event(3, kind="notification", address="com.android.messaging"),
+                make_event(4, kind="notification", address="org.telegram.messenger"),
+            ]
+        )
+        config = GatewayConfig(
+            filters=[
+                FilterRule(
+                    "links",
+                    kind=("sms",),
+                    sender=("beeline",),
+                    contains=("https://dl.beeline.ru/",),
+                ),
+                FilterRule(
+                    "apps",
+                    mode="allow",
+                    kind=("notification",),
+                    sender=("org.telegram.*",),
+                ),
+            ]
+        )
+
+        async def read_frames() -> list[dict[str, object]]:
+            frames = iter_new_events(store, last_seen_id=0, config=config)
+            return [
+                json.loads((await anext(frames)).removeprefix("data: "))
+                for _ in range(4)
+            ]
+
+        verdicts = [
+            (frame["source_id"], frame["notify"], frame["filter"])
+            for frame in asyncio.run(read_frames())
+        ]
+        assert verdicts == [
+            (1, False, "links"),
+            (2, True, None),
+            (3, False, "apps"),
+            (4, True, "apps"),
+        ]
+
+    def test_frames_without_a_policy_are_announced(
         self, populated_store: EventStore
     ) -> None:
-        presence = ClientPresence()
+        async def read_first_frame() -> str:
+            frames = iter_new_events(populated_store, last_seen_id=0)
+            return await anext(frames)
 
-        async def open_and_close() -> None:
-            frames = cast(
-                AsyncGenerator[str],
-                iter_new_events(
-                    populated_store,
-                    last_seen_id=0,
-                    presence=presence,
-                    clock=lambda: 1_000,
-                ),
-            )
-            await anext(frames)
-            assert presence.is_watched(5_000) is True
-            await frames.aclose()
-
-        asyncio.run(open_and_close())
-        assert presence.is_watched(1_060) is True
-        assert presence.is_watched(1_061) is False
+        frame = json.loads(asyncio.run(read_first_frame()).removeprefix("data: "))
+        assert (frame["notify"], frame["filter"]) == (True, None)
 
 
 def test_a_device_reconnecting_waits_out_its_own_release(  # noqa: C901

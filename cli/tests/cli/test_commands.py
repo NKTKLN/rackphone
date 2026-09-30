@@ -313,12 +313,12 @@ class TestGatewayCommands:
         capsys: pytest.CaptureFixture[str],
     ) -> None:
         config_file = tmp_path / "gateway.toml"
-        config_file.write_text('[ntfy]\nurl="https://n.example"\npassword="hunter2"\n')
+        config_file.write_text('[admin]\nusername="ops"\npassword_hash="hunter2"\n')
         monkeypatch.setenv("RACKPHONE_GATEWAY_CONFIG", str(config_file))
 
         assert main(["gwconfig"]) == EXIT_OK
         out = capsys.readouterr().out
-        assert "n.example" in out
+        assert "ops" in out
         assert "hunter2" not in out
 
     @pytest.mark.usefixtures("adopted_unit")
@@ -338,8 +338,6 @@ class TestGatewayCommands:
         assert main(["gateway", "--once"]) == EXIT_OK
         out = capsys.readouterr().out
         assert "1 new" in out
-        # Without ntfy configured the events are stored but never leave.
-        assert "not pushed" in out
 
 
 def test_the_schema_fixture_matches_what_the_device_reports() -> None:
@@ -415,31 +413,15 @@ class TestUnitStates:
 
 
 class TestGatewayHelpers:
-    def test_alerts_go_to_the_forwarder_and_its_failures_are_contained(
+    def test_security_alerts_are_written_to_the_log(
         self, capsys: pytest.CaptureFixture[str]
     ) -> None:
         from rackphone.cli.commands import gateway  # noqa: PLC0415 - loaded lazily
-        from rackphone.gateway.notify import NtfyError  # noqa: PLC0415
 
-        sent: list[tuple[str, str]] = []
-
-        class Forwarder:
-            def send_alert(self, reason: str, message: str) -> None:
-                sent.append((reason, message))
-                if reason == "broken":
-                    raise NtfyError("refused")
-
-        alert = gateway._alert_callback(Forwarder())  # type: ignore[arg-type]
-        alert("new_device", "A login succeeded.")
-        alert("broken", "Never arrives.")
-        assert sent == [
-            ("new_device", "A login succeeded."),
-            ("broken", "Never arrives."),
-        ]
-        assert "ntfy system alert failed" in capsys.readouterr().out
-
-        # Without a forwarder there is nowhere to send, and that is not an error.
-        gateway._alert_callback(None)("new_device", "A login succeeded.")
+        gateway._log_alert("new_device", "A login succeeded.")
+        assert "security alert (new_device): A login succeeded." in (
+            capsys.readouterr().out
+        )
 
     @pytest.mark.usefixtures("repo")
     def test_a_single_drain_fails_when_a_unit_could_not_be_reached(

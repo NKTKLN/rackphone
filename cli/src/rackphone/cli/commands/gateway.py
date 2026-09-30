@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import argparse
 import time
-from collections.abc import Callable
 
 import uvicorn
 
@@ -16,8 +15,6 @@ from rackphone.gateway.config import GatewayConfig, get_config_path
 from rackphone.gateway.drain import MessageGateway
 from rackphone.gateway.filters import FilterConfigError
 from rackphone.gateway.login import LoginService
-from rackphone.gateway.notify import NtfyError, NtfyForwarder
-from rackphone.gateway.presence import ClientPresence
 from rackphone.gateway.session import SessionManager
 from rackphone.gateway.store import EventStore
 
@@ -37,27 +34,14 @@ def _load_config() -> GatewayConfig | None:
         return None
 
 
-def _alert_callback(
-    forwarder: NtfyForwarder | None,
-) -> Callable[[str, str], None]:
-    """Build a best-effort system-alert callback.
+def _log_alert(reason: str, message: str) -> None:
+    """Write a login-policy security alert to the gateway log.
 
     Args:
-        forwarder: Configured notification sink, or None.
-
-    Returns:
-        Callable[[str, str], None]: Callback safe for login policy to invoke.
+        reason: Short machine-readable alert reason.
+        message: Human-readable alert text, free of secret values.
     """
-
-    def alert(reason: str, message: str) -> None:
-        if forwarder is None:
-            return
-        try:
-            forwarder.send_alert(reason, message)
-        except NtfyError as exc:
-            render.warn(f"ntfy system alert failed: {exc}")
-
-    return alert
+    render.warn(f"security alert ({reason}): {message}")
 
 
 def run_gateway(args: argparse.Namespace) -> int:
@@ -79,11 +63,9 @@ def run_gateway(args: argparse.Namespace) -> int:
 
     store = EventStore(config.database_path or None)
     auth_store = AuthStore(config.database_path or None)
-    forwarder = NtfyForwarder(config.ntfy) if config.ntfy.is_configured else None
-    presence = ClientPresence()
     sessions = SessionManager(clock=lambda: int(time.time()))
 
-    login = LoginService(config, auth_store, _alert_callback(forwarder))
+    login = LoginService(config, auth_store, _log_alert)
 
     def gateway_clock() -> int:
         """Read time and reap screen leases from the existing timed loop."""
@@ -91,27 +73,20 @@ def run_gateway(args: argparse.Namespace) -> int:
         sessions.reap(now)
         return now
 
-    gateway = MessageGateway(config, store, forwarder, presence, clock=gateway_clock)
+    gateway = MessageGateway(config, store, clock=gateway_clock)
 
-    if forwarder is None:
-        render.warn(
-            "ntfy is not configured; events are stored and served but not pushed"
-        )
-        render.dim(f"  set ntfy.url and ntfy.topic in {get_config_path()}")
-    elif config.filters:
-        render.dim(f"  {len(config.filters)} filter rule(s) applied before pushing")
+    if config.filters:
+        render.dim(f"  {len(config.filters)} filter rule(s) applied to the stream")
 
     if args.once:
         try:
             return _drain_once(gateway)
         finally:
-            if forwarder is not None:
-                forwarder.close()
             auth_store.close()
             store.close()
 
     gateway.start_in_background()
-    app = create_app(config, store, login, gateway, presence, sessions)
+    app = create_app(config, store, login, gateway, sessions)
     render.ok(f"API on http://{config.api_host}:{config.api_port}  (docs at /docs)")
     try:
         uvicorn.run(
@@ -122,8 +97,6 @@ def run_gateway(args: argparse.Namespace) -> int:
         )
     finally:
         gateway.stop()
-        if forwarder is not None:
-            forwarder.close()
         auth_store.close()
         store.close()
     return EXIT_OK
@@ -140,11 +113,7 @@ def _drain_once(gateway: MessageGateway) -> int:
     """
     stored = gateway.run_once()
     stats = gateway.stats
-    render.ok(f"drained {stats.drained} event(s), {stored} new, {stats.pushed} pushed")
-    if stats.filtered:
-        render.dim(f"  {stats.filtered} suppressed by filters, stored either way")
-    if stats.push_failed:
-        render.warn(f"  {stats.push_failed} push failure(s)")
+    render.ok(f"drained {stats.drained} event(s), {stored} new")
     return EXIT_FAILURE if stats.errors else EXIT_OK
 
 

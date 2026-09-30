@@ -149,7 +149,7 @@ class EventStore:
             The events that were not already stored.
         """
         # The caller forwards the returned list onward, so a redelivered batch
-        # cannot re-alert: dedup at the storage layer is also dedup for ntfy.
+        # cannot re-alert: dedup at the storage layer is also dedup for the stream.
         received_at = int(time.time())
         stored: list[Event] = []
         with self.connection:
