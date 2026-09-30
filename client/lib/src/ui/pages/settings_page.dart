@@ -337,4 +337,4 @@ class _SettingsPageState extends State<SettingsPage> {
 }
 
 /// Matches `version` in pubspec.yaml.
-const _version = '0.2.0';
+const _version = '0.3.0';
