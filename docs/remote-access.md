@@ -191,7 +191,11 @@ within fifteen minutes without a database lookup on every video frame.
 A screen or call socket is the exception, because it outlives any one access
 token. Control routes and both sockets check that the token's session is still
 live, and a socket repeats that check on every heartbeat, so revoking a device
-closes a relay it already holds within ten seconds.
+closes a relay it already holds within ten seconds. The event stream at
+`/api/stream` outlives its token too: it checks the login behind it before every
+poll and ends within one poll of the device being revoked or logged out. It
+follows the login rather than one refresh row, so the routine rotation that
+replaces the row does not cut it.
 
 A login asks for the scope it wants and gets no more. The default is `control`,
 not `admin`: the app needs the screen and the send route, not the action log, and
@@ -220,7 +224,10 @@ trigger from anywhere with five wrong passwords.
 Off by default, switched on from the app's account settings. Enabling it asks
 for the password again — otherwise whoever picked up an unlocked phone could
 bind their own authenticator — and activates only after a generated code is
-confirmed. Eight single-use recovery codes are shown once, and
+confirmed. Once it is on, replacing or turning it off also asks for a current
+code or a recovery code, so the password alone never removes the factor that
+guards it. These checks run from a live session only, and every wrong answer
+counts toward the same lockout and audit log as a failed login. Eight single-use recovery codes are shown once, and
 `rackphone admin totp reset` on the host is the break-glass path when both the
 authenticator and the codes are gone.
 

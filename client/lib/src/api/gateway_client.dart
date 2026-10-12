@@ -130,7 +130,10 @@ abstract interface class GatewayAdminApi {
   Future<void> revokeAllSessions();
   Future<List<AuditEntry>> audit({int? limit});
   Future<TotpEnrollment> enableTotp(String password);
-  Future<void> disableTotp(String password);
+
+  /// The gateway also asks for the current authenticator or recovery code,
+  /// so a stolen password alone cannot remove the second factor.
+  Future<void> disableTotp(String password, String code);
 }
 
 extension GatewayAdminAccess on GatewayApi {
@@ -464,9 +467,17 @@ class GatewayClient
   }
 
   @override
-  Future<void> disableTotp(String password) async {
+  Future<void> disableTotp(String password, String code) async {
+    final trimmed = code.trim();
+    // Six digits is an authenticator code; anything else is a recovery code.
+    final factor = RegExp(r'^\d{6}$').hasMatch(trimmed)
+        ? 'totp_code'
+        : 'recovery_code';
     final response = await _authenticated(
-      () => _jsonRequest('DELETE', '/api/totp', {'password': password}),
+      () => _jsonRequest('DELETE', '/api/totp', {
+        'password': password,
+        factor: trimmed,
+      }),
     );
     await response.stream.drain<void>();
   }

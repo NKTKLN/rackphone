@@ -23,7 +23,13 @@ from fastapi.testclient import TestClient
 from rackphone.device import adb
 from rackphone.gateway import api
 from rackphone.gateway.api import client_ip, create_app, iter_new_events
-from rackphone.gateway.auth import SCOPE_CONTROL, SCOPE_READ, hash_password
+from rackphone.gateway.auth import (
+    SCOPE_ADMIN,
+    SCOPE_CONTROL,
+    SCOPE_READ,
+    hash_password,
+    totp_code,
+)
 from rackphone.gateway.authstore import AuthStore
 from rackphone.gateway.config import AdminConfig, GatewayConfig
 from rackphone.gateway.contacts import ContactBook, ContactsError
@@ -537,7 +543,98 @@ class TestAuth:
                 json={"password": "wrong"},
                 headers={"Authorization": "Bearer legacy"},
             )
+        # 403, not 401: the token is fine, and the client renews and retries on
+        # 401, which would count every wrong password twice.
+        assert response.status_code == HTTP_FORBIDDEN
+        assert response.json()["detail"] == "bad_credentials"
+        auth_store.close()
+
+    def test_totp_password_guesses_are_counted_audited_and_locked(
+        self, populated_store: EventStore, tmp_path: Path
+    ) -> None:
+        # An admin token must not turn the step-up check into a password oracle
+        # that the login lockout never sees.
+        config = GatewayConfig(admin=AdminConfig("admin", hash_password("right")))
+        auth_store = AuthStore(tmp_path / "auth.db")
+        login = LoginService(config, auth_store)
+        outcome = login.log_in(
+            "admin", "right", "peer", "phone", int(time.time()), scope=SCOPE_ADMIN
+        )
+        assert outcome.tokens is not None
+        headers = {"Authorization": f"Bearer {outcome.tokens.access}"}
+        with TestClient(create_app(config, populated_store, login)) as client:
+            statuses = [
+                client.request(
+                    "DELETE", "/api/totp", json={"password": "guess"}, headers=headers
+                ).status_code
+                for _ in range(4)
+            ]
+            right = client.request(
+                "DELETE", "/api/totp", json={"password": "right"}, headers=headers
+            )
+        assert statuses == [HTTP_FORBIDDEN] * 3 + [HTTP_LOCKED]
+        assert right.status_code == HTTP_LOCKED
+        failures = [
+            row
+            for row in auth_store.query_audit(limit=50)
+            if row["action"] == "login_failed"
+        ]
+        assert len(failures) == 3
+        auth_store.close()
+
+    def test_replacing_totp_needs_the_current_second_factor(
+        self, populated_store: EventStore, tmp_path: Path
+    ) -> None:
+        # The password alone must not replace the factor that guards it.
+        config = GatewayConfig(admin=AdminConfig("admin", hash_password("right")))
+        auth_store = AuthStore(tmp_path / "auth.db")
+        login = LoginService(config, auth_store)
+        now = int(time.time())
+        secret, _ = login.enable_totp(now)
+        outcome = login.log_in(
+            "admin",
+            "right",
+            "peer",
+            "phone",
+            now,
+            totp_code=totp_code(secret, now),
+            scope=SCOPE_ADMIN,
+        )
+        assert outcome.tokens is not None
+        headers = {"Authorization": f"Bearer {outcome.tokens.access}"}
+        with TestClient(create_app(config, populated_store, login)) as client:
+            bare = client.post("/api/totp", json={"password": "right"}, headers=headers)
+            with_code = client.post(
+                "/api/totp",
+                json={"password": "right", "totp_code": totp_code(secret, now)},
+                headers=headers,
+            )
+        assert bare.status_code == HTTP_FORBIDDEN
+        assert bare.json()["detail"] == "totp_required"
+        assert with_code.status_code == HTTP_OK
+        assert auth_store.totp_secret() == with_code.json()["secret"]
+        auth_store.close()
+
+    def test_a_revoked_admin_cannot_change_totp(
+        self, populated_store: EventStore, tmp_path: Path
+    ) -> None:
+        config = GatewayConfig(admin=AdminConfig("admin", hash_password("right")))
+        auth_store = AuthStore(tmp_path / "auth.db")
+        login = LoginService(config, auth_store)
+        now = int(time.time())
+        outcome = login.log_in(
+            "admin", "right", "peer", "phone", now, scope=SCOPE_ADMIN
+        )
+        assert outcome.tokens is not None
+        login.log_out_everywhere(now)
+        with TestClient(create_app(config, populated_store, login)) as client:
+            response = client.post(
+                "/api/totp",
+                json={"password": "right"},
+                headers={"Authorization": f"Bearer {outcome.tokens.access}"},
+            )
         assert response.status_code == HTTP_UNAUTHORIZED
+        assert auth_store.totp_secret() is None
         auth_store.close()
 
 
@@ -1577,6 +1674,48 @@ class TestStream:
             (3, False, "apps"),
             (4, True, "apps"),
         ]
+
+    def test_the_stream_ends_once_its_session_is_revoked(
+        self, store: EventStore, make_event: EventFactory
+    ) -> None:
+        # The token is checked once, at connect; revoking the device must still
+        # stop it reading messages that arrive afterwards.
+        store.add_events([make_event(1)])
+        live = [True]
+
+        async def read() -> tuple[str, bool]:
+            frames = iter_new_events(
+                store, last_seen_id=0, still_authorised=lambda: live[0]
+            )
+            first = await anext(frames)
+            live[0] = False
+            try:
+                await anext(frames)
+            except StopAsyncIteration:
+                return first, True
+            return first, False
+
+        first, ended = asyncio.run(read())
+        assert first.startswith("data: ")
+        assert ended
+
+    def test_a_revoked_session_cannot_open_the_stream(
+        self, populated_store: EventStore, tmp_path: Path
+    ) -> None:
+        config = GatewayConfig(admin=AdminConfig("admin", hash_password("right")))
+        auth_store = AuthStore(tmp_path / "auth.db")
+        login = LoginService(config, auth_store)
+        now = int(time.time())
+        outcome = login.log_in("admin", "right", "peer", "phone", now, scope=SCOPE_READ)
+        assert outcome.tokens is not None
+        login.log_out_everywhere(now)
+        with TestClient(create_app(config, populated_store, login)) as client:
+            response = client.get(
+                "/api/stream",
+                headers={"Authorization": f"Bearer {outcome.tokens.access}"},
+            )
+        assert response.status_code == HTTP_UNAUTHORIZED
+        auth_store.close()
 
     def test_frames_without_a_policy_are_announced(
         self, populated_store: EventStore

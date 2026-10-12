@@ -281,12 +281,15 @@ Future<bool> enableTotp(BuildContext context, GatewayAdminApi admin) async {
   return true;
 }
 
-/// Turns two-factor sign-in off, after the password.
+/// Turns two-factor sign-in off, after the password and a current code.
 Future<bool> disableTotp(BuildContext context, GatewayAdminApi admin) async {
-  final password = await _askPassword(context, 'Turn off two-factor sign-in');
+  const title = 'Turn off two-factor sign-in';
+  final password = await _askPassword(context, title);
   if (password == null || !context.mounted) return false;
+  final code = await _askCode(context, title);
+  if (code == null || !context.mounted) return false;
   try {
-    await admin.disableTotp(password);
+    await admin.disableTotp(password, code);
     return true;
   } catch (failure) {
     if (context.mounted) _say(context, adminFailureText(failure));
@@ -296,6 +299,10 @@ Future<bool> disableTotp(BuildContext context, GatewayAdminApi admin) async {
 
 /// Says why an administrative action failed.
 String adminFailureText(Object failure) => switch (failure) {
+  GatewayForbiddenException(reason: 'bad_credentials') => 'Wrong password.',
+  GatewayForbiddenException(reason: 'totp_required' || 'bad_totp') =>
+    'That code did not match. Codes change every 30 seconds.',
+  GatewayLockedException() => 'Too many wrong attempts. Try again later.',
   GatewayForbiddenException() =>
     'This needs admin access. Sign in again with Admin access on.',
   GatewayAuthException() => 'Wrong password.',
@@ -309,11 +316,27 @@ Future<String?> _askPassword(BuildContext context, String title) =>
       builder: (context) => _PasswordDialog(title: title),
     );
 
+Future<String?> _askCode(BuildContext context, String title) =>
+    showDialog<String>(
+      context: context,
+      builder: (context) => _PasswordDialog(
+        title: title,
+        label: 'Authenticator or recovery code',
+        obscure: false,
+      ),
+    );
+
 /// Owns its field, so the text survives until the dialog has finished closing.
 class _PasswordDialog extends StatefulWidget {
-  const _PasswordDialog({required this.title});
+  const _PasswordDialog({
+    required this.title,
+    this.label = 'Password',
+    this.obscure = true,
+  });
 
   final String title;
+  final String label;
+  final bool obscure;
 
   @override
   State<_PasswordDialog> createState() => _PasswordDialogState();
@@ -334,8 +357,8 @@ class _PasswordDialogState extends State<_PasswordDialog> {
     content: TextField(
       controller: _password,
       autofocus: true,
-      obscureText: true,
-      decoration: const InputDecoration(labelText: 'Password'),
+      obscureText: widget.obscure,
+      decoration: InputDecoration(labelText: widget.label),
       onSubmitted: (value) => Navigator.pop(context, value),
     ),
     actions: <Widget>[

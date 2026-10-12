@@ -32,7 +32,8 @@ CREATE TABLE IF NOT EXISTS refresh_tokens (
     issued_at    INTEGER NOT NULL,
     expires_at   INTEGER NOT NULL,
     last_seen    INTEGER NOT NULL,
-    revoked_at   INTEGER
+    revoked_at   INTEGER,
+    family_id    INTEGER
 );
 CREATE TABLE IF NOT EXISTS login_attempts (
     id       INTEGER PRIMARY KEY,
@@ -131,7 +132,20 @@ class AuthStore:
         self.connection.execute("PRAGMA journal_mode=WAL")
         self.connection.execute("PRAGMA busy_timeout=5000")
         self.connection.executescript(SCHEMA_SQL)
+        self._add_family_column()
         self.connection.commit()
+
+    def _add_family_column(self) -> None:
+        """Give databases created before session families their column."""
+        columns = {
+            row["name"]
+            for row in self.connection.execute("PRAGMA table_info(refresh_tokens)")
+        }
+        if "family_id" not in columns:
+            # Older rows stay NULL and are read as their own family.
+            self.connection.execute(
+                "ALTER TABLE refresh_tokens ADD COLUMN family_id INTEGER"
+            )
 
     def close(self) -> None:
         """Close the database connection."""
@@ -308,7 +322,7 @@ class AuthStore:
         """
         with self.connection:
             row = self.connection.execute(
-                "SELECT id, device_label, scope FROM refresh_tokens "
+                "SELECT id, device_label, scope, family_id FROM refresh_tokens "
                 "WHERE token_hash = ? AND revoked_at IS NULL AND expires_at > ?",
                 (old_hash, now),
             ).fetchone()
@@ -318,11 +332,21 @@ class AuthStore:
                 "UPDATE refresh_tokens SET revoked_at = ? WHERE id = ?",
                 (now, row["id"]),
             )
+            # The replacement joins its predecessor's family, so a stream
+            # bound to the login survives the rotation that revoked its row.
             cursor = self.connection.execute(
                 "INSERT INTO refresh_tokens "
-                "(token_hash, device_label, scope, issued_at, expires_at, last_seen) "
-                "VALUES (?, ?, ?, ?, ?, ?)",
-                (new_hash, row["device_label"], row["scope"], now, now + ttl, now),
+                "(token_hash, device_label, scope, issued_at, expires_at, last_seen, "
+                "family_id) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (
+                    new_hash,
+                    row["device_label"],
+                    row["scope"],
+                    now,
+                    now + ttl,
+                    now,
+                    row["family_id"] or row["id"],
+                ),
             )
         row_id = cursor.lastrowid
         if row_id is None:
@@ -394,6 +418,28 @@ class AuthStore:
             (token_id, now),
         ).fetchone()
         return None if row is None else _refresh_token(row)
+
+    def family_live(self, token_id: int, now: int) -> bool:
+        """Report whether any session descended from one login is still live.
+
+        Args:
+            token_id: Refresh-token row id, as carried in an access token.
+            now: Current Unix timestamp in seconds.
+
+        Returns:
+            bool: Whether a rotation of that login is neither revoked nor
+            expired.
+        """
+        # Rotation revokes the row an access token names, so `live_refresh`
+        # alone would end a long-lived stream on every routine renewal. A
+        # revoke, revoke-all or logout leaves the family with no live row.
+        row = self.connection.execute(
+            "SELECT 1 FROM refresh_tokens WHERE COALESCE(family_id, id) = "
+            "(SELECT COALESCE(family_id, id) FROM refresh_tokens WHERE id = ?) "
+            "AND revoked_at IS NULL AND expires_at > ? LIMIT 1",
+            (token_id, now),
+        ).fetchone()
+        return row is not None
 
     def record_attempt(self, ip: str, username: str, ok: bool, now: int) -> None:
         """Record one login attempt.

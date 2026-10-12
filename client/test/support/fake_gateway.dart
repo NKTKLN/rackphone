@@ -43,6 +43,7 @@ final class FakeGateway
   final List<int> revoked = [];
   int revokedAll = 0;
   final List<String> totpPasswords = [];
+  final List<String> totpCodes = [];
   String scopeGranted = 'control';
   Object? sendFailure;
 
@@ -167,8 +168,10 @@ final class FakeGateway
   }
 
   @override
-  Future<void> disableTotp(String password) async =>
-      totpPasswords.add(password);
+  Future<void> disableTotp(String password, String code) async {
+    totpPasswords.add(password);
+    totpCodes.add(code);
+  }
 
   @override
   Future<void> logOut(String refreshToken) async {}
