@@ -224,7 +224,10 @@ trigger from anywhere with five wrong passwords.
 Off by default, switched on from the app's account settings. Enabling it asks
 for the password again — otherwise whoever picked up an unlocked phone could
 bind their own authenticator — and activates only after a generated code is
-confirmed. Eight single-use recovery codes are shown once, and
+confirmed. Once it is on, replacing or turning it off also asks for a current
+code or a recovery code, so the password alone never removes the factor that
+guards it. These checks run from a live session only, and every wrong answer
+counts toward the same lockout and audit log as a failed login. Eight single-use recovery codes are shown once, and
 `rackphone admin totp reset` on the host is the break-glass path when both the
 authenticator and the codes are gone.
 

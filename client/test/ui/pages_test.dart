@@ -750,6 +750,33 @@ void main() {
       expect(selectable('aaaa-1111'), findsOneWidget);
     });
 
+    testWidgets('turning off two-factor asks for a current code', (
+      tester,
+    ) async {
+      // The gateway refuses to drop the second factor on the password alone.
+      final gateway = FakeGateway(statsValue: makeStats(totp: true))
+        ..scopeGranted = 'admin';
+      final session = await _signedIn(gateway, scope: 'admin');
+      await tester.pumpWidget(_settings(session));
+      await tester.pump();
+
+      await tester.scrollUntilVisible(
+        find.text('Two-factor authentication'),
+        200,
+      );
+      await tester.tap(find.text('Two-factor authentication'));
+      await tester.pumpAndSettle();
+      await tester.enterText(find.byType(TextField), 'secret');
+      await tester.tap(find.text('Continue'));
+      await tester.pumpAndSettle();
+      await tester.enterText(find.byType(TextField), '123456');
+      await tester.tap(find.text('Continue'));
+      await tester.pumpAndSettle();
+
+      expect(gateway.totpPasswords, ['secret']);
+      expect(gateway.totpCodes, ['123456']);
+    });
+
     testWidgets('sign-out asks first', (tester) async {
       final session = await _signedIn(FakeGateway());
       await tester.pumpWidget(

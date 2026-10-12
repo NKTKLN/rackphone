@@ -39,7 +39,6 @@ from rackphone.gateway.auth import (
     SCOPE_CONTROL,
     SCOPE_READ,
     AccessClaims,
-    verify_password,
 )
 from rackphone.gateway.call import (
     CallError,
@@ -130,9 +129,13 @@ class RefreshBody(BaseModel):
 
 
 class PasswordBody(BaseModel):
-    """Administrator password required for a sensitive change."""
+    """Administrator credentials required for a sensitive change."""
 
     password: str
+    # Required once TOTP is on: whoever replaces the second factor must
+    # already hold it, or a stolen password alone would take the account.
+    totp_code: str | None = None
+    recovery_code: str | None = None
 
 
 class DialBody(BaseModel):
@@ -369,9 +372,25 @@ def create_app(  # noqa: C901, PLR0913, PLR0915, PLR0917
         Raises:
             HTTPException: If the token is invalid or its session is revoked.
         """
+        return live_session(authorization, SCOPE_CONTROL)
+
+    def live_session(authorization: str, scope: str) -> tuple[str, int | None]:
+        """Authenticate a token of one scope against a session still live.
+
+        Args:
+            authorization: Raw `Authorization` header value.
+            scope: Minimum scope the route needs.
+
+        Returns:
+            tuple[str, int | None]: The device label and its refresh-session
+            id, which is `None` for the legacy token.
+
+        Raises:
+            HTTPException: If the token is invalid or its session is revoked.
+        """
         token = bearer_token(authorization)
         now = int(time.time())
-        claims: AccessClaims | None = login.authorise(token, now, SCOPE_CONTROL)
+        claims: AccessClaims | None = login.authorise(token, now, scope)
         if claims is not None:
             session = login.store.live_refresh(claims.refresh_id, now)
             if session is not None:
@@ -961,21 +980,68 @@ def create_app(  # noqa: C901, PLR0913, PLR0915, PLR0917
         """List permanent authentication audit events."""
         return login.store.query_audit(since=since, limit=limit)
 
-    def require_password(password: str) -> None:
-        if not verify_password(password, config.admin.password_hash):
-            raise HTTPException(HTTPStatus.UNAUTHORIZED, "invalid password")
+    def step_up(body: PasswordBody, request: Request, authorization: str) -> None:
+        """Re-verify the administrator, from a live session, before a change.
+
+        Args:
+            body: Password and, once TOTP is on, a current second factor.
+            request: Incoming request, for the address the lockout counts.
+            authorization: Raw `Authorization` header value.
+
+        Raises:
+            HTTPException: 401 for a dead session, 403 for refused credentials,
+            423 while locked out.
+        """
+        # A revoked device keeps a signed token for its remaining minutes;
+        # without this it could still replace the factor that locks it out.
+        live_session(authorization, SCOPE_ADMIN)
+        peer = request.client.host if request.client else ""
+        now = int(time.time())
+        refusal = login.reauthenticate(
+            body.password,
+            client_ip(
+                peer,
+                request.headers.get("x-forwarded-for", ""),
+                config.trusted_proxies,
+            ),
+            now,
+            body.totp_code,
+            body.recovery_code,
+        )
+        if refusal is None:
+            return
+        if refusal.reason == RefusalReason.LOCKED:
+            seconds = max(0, (refusal.locked_until or 0) - now)
+            raise HTTPException(
+                HTTPStatus.LOCKED,
+                detail=refusal.reason,
+                headers={"Retry-After": str(seconds)},
+            )
+        if refusal.reason == RefusalReason.NOT_CONFIGURED:
+            raise HTTPException(HTTPStatus.SERVICE_UNAVAILABLE, detail=refusal.reason)
+        # 403, not 401: the token is fine, and a client that renews on 401 and
+        # retries would count every wrong password twice.
+        raise HTTPException(HTTPStatus.FORBIDDEN, detail=refusal.reason)
 
     @app.post("/api/totp", dependencies=admin_auth)
-    def enable_totp(body: PasswordBody) -> dict[str, str | list[str]]:
-        """Enable TOTP after re-verifying the administrator password."""
-        require_password(body.password)
+    def enable_totp(
+        body: PasswordBody,
+        request: Request,
+        authorization: Annotated[str, Header()] = "",
+    ) -> dict[str, str | list[str]]:
+        """Enable or replace TOTP after re-verifying the administrator."""
+        step_up(body, request, authorization)
         secret, recovery_codes = login.enable_totp(int(time.time()))
         return {"secret": secret, "recovery_codes": recovery_codes}
 
     @app.delete("/api/totp", dependencies=admin_auth)
-    def disable_totp(body: PasswordBody) -> Response:
-        """Disable TOTP after re-verifying the administrator password."""
-        require_password(body.password)
+    def disable_totp(
+        body: PasswordBody,
+        request: Request,
+        authorization: Annotated[str, Header()] = "",
+    ) -> Response:
+        """Disable TOTP after re-verifying the administrator."""
+        step_up(body, request, authorization)
         login.disable_totp(int(time.time()))
         return Response(status_code=HTTPStatus.NO_CONTENT)
 

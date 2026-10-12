@@ -368,7 +368,7 @@ void main() {
     await client.revokeAllSessions();
     expect((await client.audit(limit: 10)).single.action, 'send_sms');
     expect((await client.enableTotp('pw')).recoveryCodes, ['r1']);
-    await client.disableTotp('pw');
+    await client.disableTotp('pw', '123456');
 
     expect(seen, [
       'GET /api/sessions',

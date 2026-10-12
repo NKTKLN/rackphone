@@ -183,31 +183,27 @@ class LoginService:
         if self.alert is not None:
             self.alert(reason, message)
 
-    def log_in(  # noqa: PLR0913, PLR0917
+    def _check_credentials(  # noqa: PLR0913, PLR0917
         self,
         username: str,
         password: str,
         ip: str,
-        device_label: str,
         now: int,
-        totp_code: str | None = None,
-        recovery_code: str | None = None,
-        scope: str = SCOPE_CONTROL,
-    ) -> LoginOutcome:
-        """Authenticate an administrator and issue a device token pair.
+        totp_code: str | None,
+        recovery_code: str | None,
+    ) -> LoginOutcome | None:
+        """Check credentials under the lockout ladder and audit each failure.
 
         Args:
             username: Presented administrator username.
             password: Presented administrator password.
             ip: Source IP address used for rate limiting.
-            device_label: Non-secret label recorded with the session.
             now: Current Unix timestamp in seconds.
             totp_code: Optional current authenticator code.
             recovery_code: Optional unused single-use recovery code.
-            scope: Authorization scope granted to the device.
 
         Returns:
-            LoginOutcome: Issued tokens or a stable refusal reason.
+            LoginOutcome | None: The refusal, or `None` when every factor holds.
         """
         admin = self.config.admin
         # No counters exist to protect until an administrator has credentials.
@@ -247,7 +243,41 @@ class LoginService:
             )
             if not totp_ok and not recovery_ok:
                 return self._record_failure(username, ip, now, RefusalReason.BAD_TOTP)
+        return None
 
+    def log_in(  # noqa: PLR0913, PLR0917
+        self,
+        username: str,
+        password: str,
+        ip: str,
+        device_label: str,
+        now: int,
+        totp_code: str | None = None,
+        recovery_code: str | None = None,
+        scope: str = SCOPE_CONTROL,
+    ) -> LoginOutcome:
+        """Authenticate an administrator and issue a device token pair.
+
+        Args:
+            username: Presented administrator username.
+            password: Presented administrator password.
+            ip: Source IP address used for rate limiting.
+            device_label: Non-secret label recorded with the session.
+            now: Current Unix timestamp in seconds.
+            totp_code: Optional current authenticator code.
+            recovery_code: Optional unused single-use recovery code.
+            scope: Authorization scope granted to the device.
+
+        Returns:
+            LoginOutcome: Issued tokens or a stable refusal reason.
+        """
+        refusal = self._check_credentials(
+            username, password, ip, now, totp_code, recovery_code
+        )
+        if refusal is not None:
+            return refusal
+
+        admin = self.config.admin
         self.store.record_attempt(ip, username, True, now)
         self.store.clear_lock(self._ip_subject(ip))
         self.store.clear_lock(self._account_subject(admin.username))
@@ -277,6 +307,37 @@ class LoginService:
                 "A login succeeded from a device not seen before.",
             )
         return LoginOutcome(tokens=tokens)
+
+    def reauthenticate(
+        self,
+        password: str,
+        ip: str,
+        now: int,
+        totp_code: str | None = None,
+        recovery_code: str | None = None,
+    ) -> LoginOutcome | None:
+        """Re-verify the administrator before a change to the credentials.
+
+        Args:
+            password: Presented administrator password.
+            ip: Source IP address used for rate limiting.
+            now: Current Unix timestamp in seconds.
+            totp_code: Current authenticator code, required once TOTP is on.
+            recovery_code: Unused recovery code, accepted in place of the code.
+
+        Returns:
+            LoginOutcome | None: The refusal, or `None` when the caller passed.
+        """
+        # The same ladder and audit as a login: a bearer token must not turn
+        # this check into a guessing oracle that nothing counts or records.
+        return self._check_credentials(
+            self.config.admin.username,
+            password,
+            ip,
+            now,
+            totp_code,
+            recovery_code,
+        )
 
     def refresh(self, refresh_token: str, now: int) -> LoginOutcome:
         """Rotate a refresh token and issue a matching access token.
