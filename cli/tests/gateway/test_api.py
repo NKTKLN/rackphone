@@ -1578,6 +1578,48 @@ class TestStream:
             (4, True, "apps"),
         ]
 
+    def test_the_stream_ends_once_its_session_is_revoked(
+        self, store: EventStore, make_event: EventFactory
+    ) -> None:
+        # The token is checked once, at connect; revoking the device must still
+        # stop it reading messages that arrive afterwards.
+        store.add_events([make_event(1)])
+        live = [True]
+
+        async def read() -> tuple[str, bool]:
+            frames = iter_new_events(
+                store, last_seen_id=0, still_authorised=lambda: live[0]
+            )
+            first = await anext(frames)
+            live[0] = False
+            try:
+                await anext(frames)
+            except StopAsyncIteration:
+                return first, True
+            return first, False
+
+        first, ended = asyncio.run(read())
+        assert first.startswith("data: ")
+        assert ended
+
+    def test_a_revoked_session_cannot_open_the_stream(
+        self, populated_store: EventStore, tmp_path: Path
+    ) -> None:
+        config = GatewayConfig(admin=AdminConfig("admin", hash_password("right")))
+        auth_store = AuthStore(tmp_path / "auth.db")
+        login = LoginService(config, auth_store)
+        now = int(time.time())
+        outcome = login.log_in("admin", "right", "peer", "phone", now, scope=SCOPE_READ)
+        assert outcome.tokens is not None
+        login.log_out_everywhere(now)
+        with TestClient(create_app(config, populated_store, login)) as client:
+            response = client.get(
+                "/api/stream",
+                headers={"Authorization": f"Bearer {outcome.tokens.access}"},
+            )
+        assert response.status_code == HTTP_UNAUTHORIZED
+        auth_store.close()
+
     def test_frames_without_a_policy_are_announced(
         self, populated_store: EventStore
     ) -> None:

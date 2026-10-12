@@ -191,7 +191,11 @@ within fifteen minutes without a database lookup on every video frame.
 A screen or call socket is the exception, because it outlives any one access
 token. Control routes and both sockets check that the token's session is still
 live, and a socket repeats that check on every heartbeat, so revoking a device
-closes a relay it already holds within ten seconds.
+closes a relay it already holds within ten seconds. The event stream at
+`/api/stream` outlives its token too: it checks the login behind it before every
+poll and ends within one poll of the device being revoked or logged out. It
+follows the login rather than one refresh row, so the routine rotation that
+replaces the row does not cut it.
 
 A login asks for the scope it wants and gets no more. The default is `control`,
 not `admin`: the app needs the screen and the send route, not the action log, and

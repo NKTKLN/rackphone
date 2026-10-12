@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sqlite3
 from collections.abc import Iterator
 from pathlib import Path
 
@@ -214,3 +215,48 @@ def test_security_summary_carries_no_identifiers(auth_store: AuthStore) -> None:
     assert "198.51.100.7" not in repr(summary)
     assert "admin" not in repr(summary)
     assert summary["failed_logins_24h"] == 1
+
+
+def test_a_family_outlives_rotation_but_not_revocation(auth_store: AuthStore) -> None:
+    # A stream bound to a login must survive the renewal that revokes the row
+    # its token names, and end when the device itself is revoked.
+    first = auth_store.issue_refresh("first", "phone", "read", 10, 100)
+    second = auth_store.rotate_refresh("first", "second", 20, 100)
+    assert second is not None
+    third = auth_store.rotate_refresh("second", "third", 30, 100)
+    assert third is not None
+    other = auth_store.issue_refresh("other", "laptop", "read", 10, 100)
+
+    assert auth_store.family_live(first, 40)
+    assert auth_store.revoke_refresh(third, 40)
+    assert not auth_store.family_live(first, 41)
+    assert not auth_store.family_live(third, 41)
+    assert auth_store.family_live(other, 41)
+    assert not auth_store.family_live(other, 200)
+
+
+def test_a_database_without_families_gains_the_column(tmp_path: Path) -> None:
+    path = tmp_path / "messages.db"
+    with sqlite3.connect(path) as connection:
+        connection.execute(
+            "CREATE TABLE refresh_tokens (id INTEGER PRIMARY KEY, "
+            "token_hash TEXT NOT NULL UNIQUE, device_label TEXT NOT NULL, "
+            "scope TEXT NOT NULL, issued_at INTEGER NOT NULL, "
+            "expires_at INTEGER NOT NULL, last_seen INTEGER NOT NULL, "
+            "revoked_at INTEGER)"
+        )
+        connection.execute(
+            "INSERT INTO refresh_tokens (token_hash, device_label, scope, "
+            "issued_at, expires_at, last_seen) VALUES ('old', 'phone', 'read', "
+            "10, 110, 10)"
+        )
+    connection.close()
+    store = AuthStore(path)
+    try:
+        renewed = store.rotate_refresh("old", "new", 20, 100)
+        assert renewed is not None
+        assert store.family_live(1, 30)
+        assert store.revoke_refresh(renewed, 30)
+        assert not store.family_live(1, 31)
+    finally:
+        store.close()

@@ -1122,13 +1122,40 @@ def create_app(  # noqa: C901, PLR0913, PLR0915, PLR0917
             raise translate_device_error(exc) from exc
 
     @app.get("/api/stream", dependencies=read_auth)
-    async def stream_events() -> StreamingResponse:
+    async def stream_events(
+        authorization: Annotated[str, Header()] = "",
+    ) -> StreamingResponse:
         """Stream events stored after the connection opens."""
+        token = bearer_token(authorization)
+        claims = login.authorise(token, int(time.time()), SCOPE_READ)
+        # Only the legacy token streams unbound. A signed token that expired
+        # since the dependency ran must not be mistaken for it.
+        if claims is None and not (
+            legacy_enabled and hmac.compare_digest(token, config.api_token)
+        ):
+            raise HTTPException(
+                HTTPStatus.UNAUTHORIZED, "invalid or missing bearer token"
+            )
+        refresh_id = None if claims is None else claims.refresh_id
+
+        def still_authorised() -> bool:
+            # The token was checked once, at connect. Revoking the device must
+            # also end a stream it already holds, or it keeps reading every
+            # message that arrives. The legacy token has no session to follow.
+            return refresh_id is None or login.store.family_live(
+                refresh_id, int(time.time())
+            )
+
+        if not still_authorised():
+            raise HTTPException(
+                HTTPStatus.UNAUTHORIZED, "invalid or missing bearer token"
+            )
         return StreamingResponse(
             iter_new_events(
                 store,
                 store.latest_event_id(),
                 config,
+                still_authorised,
             ),
             media_type="text/event-stream",
         )
@@ -1140,6 +1167,7 @@ async def iter_new_events(
     store: EventStore,
     last_seen_id: int,
     config: GatewayConfig | None = None,
+    still_authorised: Callable[[], bool] | None = None,
 ) -> AsyncIterator[str]:
     """Yield permitted stored rows above a starting id, oldest first.
 
@@ -1147,11 +1175,13 @@ async def iter_new_events(
         store: Event store to follow.
         last_seen_id: Highest row id the client has already seen.
         config: Capability and filter policy, or None to permit and announce all.
+        still_authorised: Checked before every poll; the stream ends once it
+            returns False. None follows the store for as long as it is read.
 
     Yields:
         str: One server-sent `data:` frame per stored event.
     """
-    while True:
+    while still_authorised is None or still_authorised():
         rows = readable_rows(
             [
                 row
